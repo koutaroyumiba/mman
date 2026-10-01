@@ -14,7 +14,7 @@ pub struct Cli {
     #[arg(long, requires = "topic", conflicts_with = "where_path")]
     pub raw: bool,
 
-    /// Print the selected page's sourth path
+    /// Print the selected page's source path
     #[arg(long = "where", requires = "topic", conflicts_with = "raw")]
     pub where_path: bool,
 
