@@ -1,4 +1,9 @@
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    ffi::OsStr,
+    fmt, fs, io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopicError {
@@ -69,9 +74,100 @@ pub fn normalize_topic(topic: &str) -> Result<String, TopicError> {
     Ok(topic.to_owned())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub topic: String,
+    pub path: PathBuf,
+    kind: PageKind,
+}
+
+// we allow for index pages (ownership/index.md => ownership page)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PageKind {
+    Direct,
+    Index,
+}
+
+pub fn discover_pages(root: &Path) -> io::Result<Vec<Page>> {
+    let mut pages = Vec::new();
+
+    discover_directory(root, root, &mut pages)?;
+
+    pages.sort_by(|left, right| {
+        left.topic
+            .cmp(&right.topic)
+            .then(left.kind.cmp(&right.kind))
+            .then(left.path.cmp(&right.path))
+    });
+
+    Ok(pages)
+}
+
+fn discover_directory(root: &Path, directory: &Path, pages: &mut Vec<Page>) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+
+        if name.as_encoded_bytes().starts_with(b".") {
+            continue;
+        }
+
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+
+        if file_type.is_dir() {
+            discover_directory(root, &path, pages)?;
+            continue;
+        }
+
+        let is_page = if file_type.is_file() {
+            true
+        } else if file_type.is_symlink() {
+            entry.metadata()?.is_file()
+        } else {
+            false
+        };
+
+        if !is_page || path.extension() != Some(OsStr::new("md")) {
+            continue;
+        }
+
+        if let Some((topic, kind)) = topic_from_path(root, &path) {
+            pages.push(Page { topic, path, kind });
+        }
+    }
+
+    Ok(())
+}
+
+fn topic_from_path(root: &Path, path: &Path) -> Option<(String, PageKind)> {
+    let relative = path.strip_prefix(root).ok()?;
+
+    let (topic_path, kind) = if relative.file_name()? == "index.md" {
+        (relative.parent()?.to_path_buf(), PageKind::Index)
+    } else {
+        (relative.with_extension(""), PageKind::Direct)
+    };
+
+    if topic_path.as_os_str().is_empty() {
+        return None;
+    }
+
+    let components: Option<Vec<&str>> = topic_path
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect();
+
+    Some((components?.join("/"), kind))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TopicError, normalize_topic};
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{TopicError, discover_pages, normalize_topic};
 
     #[test]
     fn accepts_plain_topic() {
@@ -148,5 +244,88 @@ mod tests {
             normalize_topic("concepts/\u{1b}ownership"),
             Err(TopicError::ControlCharacter)
         );
+    }
+
+    #[test]
+    fn discovers_root_and_nested_pages() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let nested = directory.path().join("concepts");
+
+        fs::create_dir(&nested).expect("nested directory should be created");
+        fs::write(directory.path().join("git.md"), "# Git").expect("root page should be written");
+        fs::write(nested.join("ownership.md"), "# Ownership")
+            .expect("nested page should be written");
+
+        let pages = discover_pages(directory.path()).expect("pages should be discovered");
+
+        let topics: Vec<&str> = pages.iter().map(|page| page.topic.as_str()).collect();
+
+        assert_eq!(topics, vec!["concepts/ownership", "git"]);
+    }
+
+    #[test]
+    fn normalizes_index_page_to_parent_topic() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let page_directory = directory.path().join("concepts/ownership");
+
+        fs::create_dir_all(&page_directory).expect("page directory should be created");
+        fs::write(page_directory.join("index.md"), "# Ownership")
+            .expect("index page should be written");
+
+        let pages = discover_pages(directory.path()).expect("pages should be discovered");
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].topic, "concepts/ownership");
+    }
+
+    #[test]
+    fn prefers_direct_page_over_index_page() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let index_directory = directory.path().join("ownership");
+
+        fs::create_dir(&index_directory).expect("index directory should be created");
+        fs::write(directory.path().join("ownership.md"), "# Direct")
+            .expect("direct page should be written");
+        fs::write(index_directory.join("index.md"), "# Index")
+            .expect("index page should be written");
+
+        let pages = discover_pages(directory.path()).expect("pages should be discovered");
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].path, directory.path().join("ownership.md"));
+        assert_eq!(pages[1].path, index_directory.join("index.md"));
+    }
+
+    #[test]
+    fn ignores_hidden_paths_and_non_markdown_files() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let hidden_directory = directory.path().join(".private");
+
+        fs::create_dir(&hidden_directory).expect("hidden directory should be created");
+        fs::write(directory.path().join(".hidden.md"), "# Hidden")
+            .expect("hidden page should be written");
+        fs::write(hidden_directory.join("secret.md"), "# Secret")
+            .expect("hidden nested page should be written");
+        fs::write(directory.path().join("notes.txt"), "Notes")
+            .expect("text file should be written");
+        fs::write(directory.path().join("visible.md"), "# Visible")
+            .expect("visible page should be written");
+
+        let pages = discover_pages(directory.path()).expect("pages should be discovered");
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].topic, "visible");
+    }
+
+    #[test]
+    fn ignores_root_index_page() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("index.md"), "# Root")
+            .expect("index page should be written");
+
+        let pages = discover_pages(directory.path()).expect("pages should be discovered");
+
+        assert!(pages.is_empty());
     }
 }
