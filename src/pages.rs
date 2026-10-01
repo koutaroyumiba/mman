@@ -89,6 +89,23 @@ enum PageKind {
     Index,
 }
 
+#[derive(Debug)]
+pub enum LookupError {
+    InvalidTopic(TopicError),
+    NotFound(String),
+}
+
+impl fmt::Display for LookupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LookupError::InvalidTopic(error) => write!(formatter, "invalid topic: {error}"),
+            LookupError::NotFound(topic) => write!(formatter, "no manual page found for {topic}"),
+        }
+    }
+}
+
+impl Error for LookupError {}
+
 /// Searchable collection of all discovered pages
 #[derive(Debug, Default)]
 pub struct PageIndex {
@@ -134,6 +151,16 @@ impl PageIndex {
     /// Checks if the index contains any topics
     pub fn is_empty(&self) -> bool {
         self.pages.is_empty()
+    }
+
+    /// User-facing operation
+    pub fn lookup(&self, topic: &str) -> Result<&Page, LookupError> {
+        let normalized_topic = normalize_topic(topic).map_err(LookupError::InvalidTopic)?;
+
+        match self.resolve(normalized_topic.as_str()) {
+            Some(page) => Ok(page),
+            None => Err(LookupError::NotFound(normalized_topic)),
+        }
     }
 }
 
@@ -216,7 +243,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{PageIndex, TopicError, discover_pages, normalize_topic};
+    use super::{LookupError, PageIndex, TopicError, discover_pages, normalize_topic};
 
     #[test]
     fn accepts_plain_topic() {
@@ -457,5 +484,103 @@ mod tests {
         assert_eq!(index.topics().count(), 0);
         assert!(index.resolve("missing").is_none());
         assert!(index.resolve_all("missing").is_empty());
+    }
+
+    #[test]
+    fn lookup_accepts_topic_with_or_without_markdown_extension() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let page_path = directory.path().join("ownership.md");
+
+        fs::write(&page_path, "# Ownership").expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert_eq!(
+            index
+                .lookup("ownership")
+                .expect("topic should resolve")
+                .path,
+            page_path
+        );
+        assert_eq!(
+            index
+                .lookup("ownership.md")
+                .expect("topic with extension should resolve")
+                .path,
+            page_path
+        );
+    }
+
+    #[test]
+    fn lookup_rejects_invalid_topic() {
+        let index = PageIndex::discover(&[]).expect("empty page index should be built");
+
+        let result = index.lookup("../ownership");
+
+        assert!(matches!(
+            result,
+            Err(LookupError::InvalidTopic(TopicError::ParentDirectory))
+        ));
+    }
+
+    #[test]
+    fn lookup_reports_missing_normalized_topic() {
+        let index = PageIndex::discover(&[]).expect("empty page index should be built");
+
+        let result = index.lookup("missing.md");
+
+        assert!(matches!(
+            result,
+            Err(LookupError::NotFound(topic)) if topic == "missing"
+        ));
+    }
+
+    #[test]
+    fn lookup_is_case_sensitive() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("Ownership.md"), "# Ownership")
+            .expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert!(index.lookup("Ownership").is_ok());
+        assert!(matches!(
+            index.lookup("ownership"),
+            Err(LookupError::NotFound(topic)) if topic == "ownership"
+        ));
+    }
+
+    #[test]
+    fn read_raw_preserves_source_bytes_exactly() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let page_path = directory.path().join("ownership.md");
+        let source = b"# Ownership\r\n\r\nBorrowing notes.\r\n";
+
+        fs::write(&page_path, source).expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+        let page = index.lookup("ownership").expect("topic should resolve");
+
+        assert_eq!(page.read_raw().expect("page should be readable"), source);
+    }
+
+    #[test]
+    fn read_raw_fails_if_page_disappears_after_discovery() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let page_path = directory.path().join("ownership.md");
+
+        fs::write(&page_path, "# Ownership").expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+        let page = index.lookup("ownership").expect("topic should resolve");
+
+        fs::remove_file(&page_path).expect("page should be removed");
+
+        assert!(page.read_raw().is_err());
     }
 }
