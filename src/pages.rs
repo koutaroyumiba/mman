@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     ffi::OsStr,
     fmt, fs, io,
@@ -88,6 +89,54 @@ enum PageKind {
     Index,
 }
 
+/// Searchable collection of all discovered pages
+#[derive(Debug, Default)]
+pub struct PageIndex {
+    pages: BTreeMap<String, Vec<Page>>,
+}
+
+impl PageIndex {
+    pub fn discover(roots: &[PathBuf]) -> io::Result<Self> {
+        let mut pages_by_topic: BTreeMap<String, Vec<Page>> = BTreeMap::new();
+
+        for root in roots {
+            for page in discover_pages(root)? {
+                pages_by_topic
+                    .entry(page.topic.clone())
+                    .or_default()
+                    .push(page);
+            }
+        }
+
+        Ok(Self {
+            pages: pages_by_topic,
+        })
+    }
+
+    /// find the default page for an exact topic
+    pub fn resolve(&self, topic: &str) -> Option<&Page> {
+        self.pages.get(topic)?.first()
+    }
+
+    /// Return every discovered copy of one topic
+    pub fn resolve_all(&self, topic: &str) -> &[Page] {
+        match self.pages.get(topic) {
+            Some(page) => page,
+            None => &[],
+        }
+    }
+
+    /// Iterates over unique topics in alphabetical order
+    pub fn topics(&self) -> impl Iterator<Item = &str> {
+        self.pages.keys().map(|item| item.as_str())
+    }
+
+    /// Checks if the index contains any topics
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+}
+
 pub fn discover_pages(root: &Path) -> io::Result<Vec<Page>> {
     let mut pages = Vec::new();
 
@@ -167,7 +216,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{TopicError, discover_pages, normalize_topic};
+    use super::{PageIndex, TopicError, discover_pages, normalize_topic};
 
     #[test]
     fn accepts_plain_topic() {
@@ -327,5 +376,86 @@ mod tests {
         let pages = discover_pages(directory.path()).expect("pages should be discovered");
 
         assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn page_index_uses_root_order_for_resolution() {
+        let first = tempdir().expect("first root should be created");
+        let second = tempdir().expect("second root should be created");
+        let first_topic_directory = first.path().join("ownership");
+
+        fs::create_dir(&first_topic_directory).expect("topic directory should be created");
+        fs::write(first_topic_directory.join("index.md"), "# First")
+            .expect("first page should be written");
+        fs::write(second.path().join("ownership.md"), "# Second")
+            .expect("second page should be written");
+
+        let index = PageIndex::discover(&[first.path().to_path_buf(), second.path().to_path_buf()])
+            .expect("page index should be built");
+
+        let resolved = index
+            .resolve("ownership")
+            .expect("ownership should resolve");
+
+        assert_eq!(resolved.path, first_topic_directory.join("index.md"));
+    }
+
+    #[test]
+    fn page_index_retains_all_copies_in_precedence_order() {
+        let first = tempdir().expect("first root should be created");
+        let second = tempdir().expect("second root should be created");
+
+        fs::write(first.path().join("git.md"), "# First").expect("first page should be written");
+        fs::write(second.path().join("git.md"), "# Second").expect("second page should be written");
+
+        let index = PageIndex::discover(&[first.path().to_path_buf(), second.path().to_path_buf()])
+            .expect("page index should be built");
+
+        let copies = index.resolve_all("git");
+
+        assert_eq!(copies.len(), 2);
+        assert_eq!(copies[0].path, first.path().join("git.md"));
+        assert_eq!(copies[1].path, second.path().join("git.md"));
+    }
+
+    #[test]
+    fn page_index_lists_unique_topics_alphabetically() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("vector.md"), "# Vector")
+            .expect("vector page should be written");
+        fs::write(directory.path().join("algorithm.md"), "# Algorithm")
+            .expect("algorithm page should be written");
+        fs::write(directory.path().join("git.md"), "# Git").expect("git page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+        let topics: Vec<&str> = index.topics().collect();
+
+        assert_eq!(topics, vec!["algorithm", "git", "vector"]);
+    }
+
+    #[test]
+    fn page_index_resolution_is_case_sensitive() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("Ownership.md"), "# Ownership")
+            .expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert!(index.resolve("Ownership").is_some());
+        assert!(index.resolve("ownership").is_none());
+    }
+
+    #[test]
+    fn page_index_can_be_empty() {
+        let index = PageIndex::discover(&[]).expect("empty page index should be built");
+
+        assert!(index.is_empty());
+        assert_eq!(index.topics().count(), 0);
+        assert!(index.resolve("missing").is_none());
+        assert!(index.resolve_all("missing").is_empty());
     }
 }
