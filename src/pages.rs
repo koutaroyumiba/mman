@@ -82,6 +82,12 @@ pub struct Page {
     kind: PageKind,
 }
 
+impl Page {
+    pub fn read_raw(&self) -> io::Result<Vec<u8>> {
+        fs::read(&self.path)
+    }
+}
+
 // we allow for index pages (ownership/index.md => ownership page)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PageKind {
