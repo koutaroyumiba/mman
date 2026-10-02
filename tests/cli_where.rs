@@ -1,4 +1,4 @@
-use std::{fs, path::Path, process::Command};
+use std::{env, fs, path::Path, process::Command};
 
 use tempfile::tempdir;
 
@@ -60,6 +60,32 @@ fn where_reports_missing_topic_on_stderr() {
 
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
     assert!(stderr.contains("no manual page found for missing"));
+}
+
+#[test]
+fn where_warns_about_invalid_root_and_uses_valid_root() {
+    let directory = tempdir().expect("temporary directory should be created");
+    let valid_root = directory.path().join("valid");
+    let missing_root = directory.path().join("missing");
+
+    fs::create_dir(&valid_root).expect("valid root should be created");
+    write_page(&valid_root, "git");
+
+    let paths = env::join_paths([missing_root.as_path(), valid_root.as_path()])
+        .expect("test paths should form a path list");
+    let output = mman_command()
+        .arg("-M")
+        .arg(paths)
+        .args(["--where", "git"])
+        .output()
+        .expect("mman should run");
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("stderr should be UTF-8")
+            .contains(&missing_root.display().to_string())
+    );
 }
 
 #[test]
