@@ -9,9 +9,9 @@
 ## Status
 
 `mman` is under active development. The current version supports deterministic
-page discovery, exact topic lookup, raw Markdown output, and source-path lookup.
-The interactive viewer and topic picker shown in the preview are not implemented
-yet.
+page discovery, exact topic lookup, raw Markdown output, source-path lookup, and
+a minimal interactive Markdown viewer. The topic picker shown in the preview is
+not implemented yet.
 
 ## Preview
 
@@ -33,6 +33,9 @@ yet.
 - Retention of duplicate topic sources for future source selection.
 - Original, byte-for-byte Markdown output with `--raw`.
 - Automatic raw output for a plain topic when the session is non-interactive.
+- Interactive Markdown viewer with Rosé Pine colors and keyboard scrolling.
+- Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
+  blocks, thematic breaks, and Unicode-aware wrapping.
 - Selected source-path output with `--where`.
 - Hidden-file and hidden-directory exclusion.
 - Symlinked Markdown files, without traversing symlinked directories.
@@ -130,8 +133,28 @@ mman concepts/ownership | grep borrow
 mman concepts/ownership > ownership.md
 ```
 
-A plain topic in a fully interactive terminal is reserved for the upcoming
-terminal viewer. Until that viewer is implemented, use `--raw` explicitly.
+### Open the interactive viewer
+
+In a fully interactive terminal, open a topic without an output option:
+
+```sh
+mman concepts/ownership
+```
+
+Current viewer keybindings:
+
+```text
+j / Down          Scroll down
+k / Up            Scroll up
+Ctrl-d / PageDown Move down by one page
+Ctrl-u / PageUp   Move up by one page
+g / Home          Go to the beginning
+G / End           Go to the end
+q / Esc           Quit
+```
+
+The initial viewer reflows content when the terminal is resized and restores
+raw mode and the alternate screen on controlled exit.
 
 ### Print the selected source path
 
@@ -213,12 +236,11 @@ duplicate retention, raw loading, typo suggestions, and command-line output.
 
 The following documented goals are still planned:
 
-- Interactive Markdown terminal viewer
 - Interactive topic picker
 - In-page search and match highlighting
 - Topic listing with `-l`
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
-- Markdown terminal rendering
 - Internal links and navigation history
-- Terminal lifecycle and restoration handling
+- Search, help, horizontal scrolling, and other full viewer controls
+- Panic-hook and interruption hardening for terminal restoration

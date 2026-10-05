@@ -1,4 +1,4 @@
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::document::{Block, Document, Link, Span, TextStyle};
 
@@ -22,7 +22,9 @@ impl Line {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     Prose,
+    Heading(u8),
     Code,
+    ThematicBreak,
 }
 
 #[derive(Clone)]
@@ -41,18 +43,156 @@ enum Token {
 pub fn layout_document(document: &Document, width: usize) -> Layout {
     let mut lines = Vec::new();
 
-    for block in &document.blocks {
-        if let Block::Paragraph { spans } = block {
-            layout_paragraph(spans, width, &mut lines);
+    for (index, block) in document.blocks.iter().enumerate() {
+        if index > 0 && !lines.is_empty() {
+            lines.push(empty_line());
         }
+        layout_block(block, width, String::new(), String::new(), &mut lines);
     }
 
     Layout { lines }
 }
 
-fn layout_paragraph(spans: &[Span], width: usize, lines: &mut Vec<Line>) {
+fn layout_block(
+    block: &Block,
+    width: usize,
+    first_prefix: String,
+    continuation_prefix: String,
+    lines: &mut Vec<Line>,
+) {
+    match block {
+        Block::Paragraph { spans } => layout_spans(
+            spans,
+            width,
+            LineKind::Prose,
+            &first_prefix,
+            &continuation_prefix,
+            lines,
+        ),
+        Block::Heading { level, spans } => layout_spans(
+            spans,
+            width,
+            LineKind::Heading(*level),
+            &first_prefix,
+            &continuation_prefix,
+            lines,
+        ),
+        Block::CodeBlock { text, .. } => {
+            for (index, code_line) in text.split_terminator('\n').enumerate() {
+                let prefix = if index == 0 {
+                    &first_prefix
+                } else {
+                    &continuation_prefix
+                };
+                let mut line = Line {
+                    spans: Vec::new(),
+                    kind: LineKind::Code,
+                };
+                push_prefix(&mut line, prefix);
+                line.spans.push(Span {
+                    text: code_line.to_owned(),
+                    style: TextStyle {
+                        inline_code: true,
+                        ..TextStyle::default()
+                    },
+                    link: None,
+                });
+                lines.push(line);
+            }
+            if text.is_empty() {
+                let mut line = Line {
+                    spans: Vec::new(),
+                    kind: LineKind::Code,
+                };
+                push_prefix(&mut line, &first_prefix);
+                lines.push(line);
+            }
+        }
+        Block::BlockQuote { blocks } => {
+            let quote_first = format!("{first_prefix}│ ");
+            let quote_continuation = format!("{continuation_prefix}│ ");
+            for child in blocks {
+                layout_block(
+                    child,
+                    width,
+                    quote_first.clone(),
+                    quote_continuation.clone(),
+                    lines,
+                );
+            }
+        }
+        Block::List { start, items } => {
+            for (item_index, item) in items.iter().enumerate() {
+                let marker = match start {
+                    Some(start) => format!("{}. ", start + item_index as u64),
+                    None => String::from("• "),
+                };
+                let base = if item_index == 0 {
+                    &first_prefix
+                } else {
+                    &continuation_prefix
+                };
+                let item_first = format!("{base}{marker}");
+                let item_continuation = format!(
+                    "{}{}",
+                    continuation_prefix,
+                    " ".repeat(UnicodeWidthStr::width(marker.as_str()))
+                );
+
+                for (block_index, child) in item.blocks.iter().enumerate() {
+                    let child_first = if block_index == 0 {
+                        item_first.clone()
+                    } else {
+                        item_continuation.clone()
+                    };
+                    layout_block(child, width, child_first, item_continuation.clone(), lines);
+                }
+            }
+        }
+        Block::ThematicBreak => {
+            let available = available_width(width, &first_prefix);
+            let mut line = Line {
+                spans: Vec::new(),
+                kind: LineKind::ThematicBreak,
+            };
+            push_prefix(&mut line, &first_prefix);
+            line.spans.push(Span {
+                text: "─".repeat(available),
+                style: TextStyle::default(),
+                link: None,
+            });
+            lines.push(line);
+        }
+    }
+}
+
+fn layout_spans(
+    spans: &[Span],
+    width: usize,
+    kind: LineKind,
+    first_prefix: &str,
+    continuation_prefix: &str,
+    lines: &mut Vec<Line>,
+) {
+    let available = available_width(width, continuation_prefix);
+    let mut wrapped = wrap_spans(spans, available, kind);
+
+    for (index, line) in wrapped.iter_mut().enumerate() {
+        let prefix = if index == 0 {
+            first_prefix
+        } else {
+            continuation_prefix
+        };
+        push_prefix(line, prefix);
+    }
+
+    lines.extend(wrapped);
+}
+
+fn wrap_spans(spans: &[Span], width: usize, kind: LineKind) -> Vec<Line> {
     let tokens = tokenize(spans);
     let width = width.max(1);
+    let mut lines = Vec::new();
     let mut characters = Vec::new();
     let mut line_width = 0;
     let mut pending_space = None;
@@ -65,7 +205,7 @@ fn layout_paragraph(spans: &[Span], width: usize, lines: &mut Vec<Line>) {
                 }
             }
             Token::Break => {
-                flush_line(lines, &mut characters, true);
+                flush_line(&mut lines, &mut characters, kind, true);
                 line_width = 0;
                 pending_space = None;
             }
@@ -74,7 +214,7 @@ fn layout_paragraph(spans: &[Span], width: usize, lines: &mut Vec<Line>) {
                 let separator_width = usize::from(pending_space.is_some());
 
                 if !characters.is_empty() && line_width + separator_width + word_width > width {
-                    flush_line(lines, &mut characters, false);
+                    flush_line(&mut lines, &mut characters, kind, false);
                     line_width = 0;
                     pending_space = None;
                 }
@@ -90,7 +230,7 @@ fn layout_paragraph(spans: &[Span], width: usize, lines: &mut Vec<Line>) {
                     let character_width = terminal_width(character.character);
 
                     if !characters.is_empty() && line_width + character_width > width {
-                        flush_line(lines, &mut characters, false);
+                        flush_line(&mut lines, &mut characters, kind, false);
                         line_width = 0;
                     }
 
@@ -101,7 +241,8 @@ fn layout_paragraph(spans: &[Span], width: usize, lines: &mut Vec<Line>) {
         }
     }
 
-    flush_line(lines, &mut characters, false);
+    flush_line(&mut lines, &mut characters, kind, false);
+    lines
 }
 
 fn tokenize(spans: &[Span]) -> Vec<Token> {
@@ -158,7 +299,16 @@ fn terminal_width(character: char) -> usize {
     UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
-fn flush_line(lines: &mut Vec<Line>, characters: &mut Vec<StyledCharacter>, force: bool) {
+fn available_width(width: usize, prefix: &str) -> usize {
+    width.saturating_sub(UnicodeWidthStr::width(prefix)).max(1)
+}
+
+fn flush_line(
+    lines: &mut Vec<Line>,
+    characters: &mut Vec<StyledCharacter>,
+    kind: LineKind,
+    force: bool,
+) {
     if characters.is_empty() && !force {
         return;
     }
@@ -168,10 +318,7 @@ fn flush_line(lines: &mut Vec<Line>, characters: &mut Vec<StyledCharacter>, forc
         append_character(&mut spans, character);
     }
 
-    lines.push(Line {
-        spans,
-        kind: LineKind::Prose,
-    });
+    lines.push(Line { spans, kind });
 }
 
 fn append_character(spans: &mut Vec<Span>, character: StyledCharacter) {
@@ -188,4 +335,26 @@ fn append_character(spans: &mut Vec<Span>, character: StyledCharacter) {
         style: character.style,
         link: character.link,
     });
+}
+
+fn push_prefix(line: &mut Line, prefix: &str) {
+    if prefix.is_empty() {
+        return;
+    }
+
+    line.spans.insert(
+        0,
+        Span {
+            text: prefix.to_owned(),
+            style: TextStyle::default(),
+            link: None,
+        },
+    );
+}
+
+fn empty_line() -> Line {
+    Line {
+        spans: Vec::new(),
+        kind: LineKind::Prose,
+    }
 }

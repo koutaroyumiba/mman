@@ -9,6 +9,7 @@ use mman::{
     cli::{Cli, ExecutionMode, TerminalState, select_mode},
     pages::PageIndex,
     paths::{search_paths, validate_roots},
+    tui::run_viewer,
 };
 
 fn main() -> ExitCode {
@@ -54,7 +55,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             let mut stdout = io::stdout().lock();
             stdout.write_all(&raw_content)?;
         }
-        ExecutionMode::Picker | ExecutionMode::Viewer { .. } => {}
+        ExecutionMode::Viewer { topic } => {
+            let page = page_index.lookup(&topic)?;
+            let source = String::from_utf8(page.read_raw()?)?;
+            run_viewer(&topic, &source)?;
+        }
+        ExecutionMode::Picker => {}
     }
 
     Ok(())
