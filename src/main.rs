@@ -1,4 +1,5 @@
 use std::io;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::process::ExitCode;
 use std::{env, error::Error, path::PathBuf};
@@ -33,7 +34,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
 
     let page_index = PageIndex::discover(&validated_paths.roots)?;
-    if cli.where_path || cli.raw {
+
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    if cli.where_path || !interactive || cli.raw {
         let Some(topic) = cli.topic.as_deref() else {
             if cli.where_path {
                 return Err("topic required for --where".into());
