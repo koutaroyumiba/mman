@@ -4,9 +4,17 @@ use mman::{
 };
 
 fn plain(text: &str) -> Span {
+    styled(text, false, false, false)
+}
+
+fn styled(text: &str, emphasis: bool, strong: bool, inline_code: bool) -> Span {
     Span {
         text: text.to_owned(),
-        style: TextStyle::default(),
+        style: TextStyle {
+            emphasis,
+            strong,
+            inline_code,
+        },
     }
 }
 
@@ -27,6 +35,42 @@ fn parses_heading_and_paragraph_into_owned_blocks() {
                 },
             ],
         }
+    );
+}
+
+#[test]
+fn parses_inline_emphasis_strong_and_code_styles() {
+    let document = parse_markdown("Use *borrowed*, **owned**, and `clone` values.\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![
+                plain("Use "),
+                styled("borrowed", true, false, false),
+                plain(", "),
+                styled("owned", false, true, false),
+                plain(", and "),
+                styled("clone", false, false, true),
+                plain(" values."),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn combines_nested_inline_styles() {
+    let document = parse_markdown("This is ***important***.\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![
+                plain("This is "),
+                styled("important", true, true, false),
+                plain("."),
+            ],
+        }]
     );
 }
 

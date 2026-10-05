@@ -15,9 +15,26 @@ impl BlockBuilder {
     }
 }
 
+#[derive(Default)]
+struct InlineStyleState {
+    emphasis_depth: usize,
+    strong_depth: usize,
+}
+
+impl InlineStyleState {
+    fn text_style(&self, inline_code: bool) -> TextStyle {
+        TextStyle {
+            emphasis: self.emphasis_depth > 0,
+            strong: self.strong_depth > 0,
+            inline_code,
+        }
+    }
+}
+
 pub fn parse_markdown(source: &str) -> Document {
     let mut document = Document::default();
     let mut current_block = None;
+    let mut inline_style = InlineStyleState::default();
 
     for event in Parser::new(source) {
         match event {
@@ -30,13 +47,31 @@ pub fn parse_markdown(source: &str) -> Document {
             Event::Start(Tag::Paragraph) => {
                 current_block = Some(BlockBuilder::Paragraph { spans: Vec::new() });
             }
+            Event::Start(Tag::Emphasis) => {
+                inline_style.emphasis_depth += 1;
+            }
+            Event::Start(Tag::Strong) => {
+                inline_style.strong_depth += 1;
+            }
             Event::Text(text) => {
-                if let Some(block) = current_block.as_mut() {
-                    block.spans_mut().push(Span {
-                        text: text.into_string(),
-                        style: TextStyle::default(),
-                    });
-                }
+                push_span(
+                    &mut current_block,
+                    text.into_string(),
+                    inline_style.text_style(false),
+                );
+            }
+            Event::Code(code) => {
+                push_span(
+                    &mut current_block,
+                    code.into_string(),
+                    inline_style.text_style(true),
+                );
+            }
+            Event::End(TagEnd::Emphasis) => {
+                inline_style.emphasis_depth = inline_style.emphasis_depth.saturating_sub(1);
+            }
+            Event::End(TagEnd::Strong) => {
+                inline_style.strong_depth = inline_style.strong_depth.saturating_sub(1);
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(BlockBuilder::Heading { level, spans }) = current_block.take() {
@@ -53,6 +88,12 @@ pub fn parse_markdown(source: &str) -> Document {
     }
 
     document
+}
+
+fn push_span(block: &mut Option<BlockBuilder>, text: String, style: TextStyle) {
+    if let Some(block) = block.as_mut() {
+        block.spans_mut().push(Span { text, style });
+    }
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
