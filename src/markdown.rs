@@ -25,9 +25,11 @@ impl BlockBuilder {
     }
 
     fn push_text(&mut self, text: String, style: TextStyle, link: Option<Link>) {
+        let text = sanitize_text(&text);
+
         match self {
             Self::Heading { spans, .. } | Self::Paragraph { spans } => {
-                spans.push(Span { text, style, link });
+                append_span(spans, text, style, link);
             }
             Self::CodeBlock {
                 text: code_text, ..
@@ -75,7 +77,7 @@ pub fn parse_markdown(source: &str) -> Document {
                         .split_whitespace()
                         .next()
                         .filter(|language| !language.is_empty())
-                        .map(str::to_owned),
+                        .map(sanitize_text),
                     CodeBlockKind::Indented => None,
                 };
                 current_block = Some(BlockBuilder::CodeBlock {
@@ -87,8 +89,8 @@ pub fn parse_markdown(source: &str) -> Document {
                 dest_url, title, ..
             }) => {
                 inline_style.link = Some(Link {
-                    destination: dest_url.into_string(),
-                    title: (!title.is_empty()).then(|| title.into_string()),
+                    destination: sanitize_text(&dest_url),
+                    title: (!title.is_empty()).then(|| sanitize_text(&title)),
                 });
             }
             Event::Start(Tag::Emphasis) => {
@@ -148,8 +150,32 @@ pub fn parse_markdown(source: &str) -> Document {
 
 fn push_span(block: &mut Option<BlockBuilder>, text: String, style: TextStyle, link: Option<Link>) {
     if let Some(spans) = block.as_mut().and_then(BlockBuilder::spans_mut) {
-        spans.push(Span { text, style, link });
+        append_span(spans, sanitize_text(&text), style, link);
     }
+}
+
+fn append_span(spans: &mut Vec<Span>, text: String, style: TextStyle, link: Option<Link>) {
+    if let Some(previous) = spans.last_mut()
+        && previous.style == style
+        && previous.link == link
+    {
+        previous.text.push_str(&text);
+        return;
+    }
+
+    spans.push(Span { text, style, link });
+}
+
+fn sanitize_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character == '\n' || character == '\t' || !character.is_control() {
+                character
+            } else {
+                '�'
+            }
+        })
+        .collect()
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {

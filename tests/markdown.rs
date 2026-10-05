@@ -87,6 +87,31 @@ fn combines_nested_inline_styles() {
 }
 
 #[test]
+fn sanitizes_terminal_control_characters_in_prose() {
+    let document = parse_markdown("safe \u{1b}[31mred\u{7}\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("safe �[31mred�")],
+        }]
+    );
+}
+
+#[test]
+fn sanitizes_code_controls_but_preserves_layout_characters() {
+    let document = parse_markdown("```text\n\tbefore\u{1b}after\n```\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::CodeBlock {
+            language: Some(String::from("text")),
+            text: String::from("\tbefore�after\n"),
+        }]
+    );
+}
+
+#[test]
 fn parses_link_destination_and_title() {
     let document =
         parse_markdown("See [ownership](../concepts/ownership.md \"Ownership guide\").\n");
