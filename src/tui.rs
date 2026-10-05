@@ -17,7 +17,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{Action, ViewBounds, ViewerState},
+    app::{Action, SearchState, ViewBounds, ViewerMode, ViewerState},
     layout::{LineKind, RenderedSpan, layout_document},
     markdown::parse_markdown,
 };
@@ -67,16 +67,17 @@ pub fn run_viewer(topic: &str, source: &str) -> io::Result<()> {
         widest_line: 0,
         viewport_width: 0,
     };
+    let mut plain_lines = Vec::new();
 
     while !state.should_quit {
         terminal.draw(|frame| {
-            bounds = render_viewer(frame, topic, &document, &mut state);
+            (bounds, plain_lines) = render_viewer(frame, topic, &document, &mut state);
         })?;
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if let Some(action) = action_for_key(key, state.show_help) {
-                    state.apply(action, bounds);
+                if let Some(action) = action_for_key(key, &state) {
+                    state.apply(action, bounds, &plain_lines);
                 }
             }
             Event::Resize(_, _) => state.clamp(bounds),
@@ -92,7 +93,7 @@ fn render_viewer(
     topic: &str,
     document: &crate::document::Document,
     state: &mut ViewerState,
-) -> ViewBounds {
+) -> (ViewBounds, Vec<String>) {
     let regions = RatatuiLayout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -114,9 +115,16 @@ fn render_viewer(
         widest_line,
         viewport_width,
     };
+    let plain_lines: Vec<String> = layout.lines.iter().map(|line| line.plain_text()).collect();
+    state.refresh_search(&plain_lines);
     state.clamp(bounds);
 
-    let rendered_lines: Vec<TuiLine<'static>> = layout.lines.iter().map(to_tui_line).collect();
+    let rendered_lines: Vec<TuiLine<'static>> = layout
+        .lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| to_tui_line(line, index, &state.search))
+        .collect();
     let title = format!(" mman · {topic} ");
     let page = Paragraph::new(rendered_lines)
         .style(Style::default().fg(TEXT).bg(BASE))
@@ -138,10 +146,21 @@ fn render_viewer(
     } else {
         format!("{}/{}", state.vertical_scroll + 1, layout.lines.len())
     };
-    let status_text = format!(
-        " {position}  x:{}  j/k scroll  h/l pan  ? help  q quit ",
-        state.horizontal_scroll
-    );
+    let status_text = match state.mode {
+        ViewerMode::SearchInput => format!(" /{}", state.search.input),
+        ViewerMode::Reading if !state.search.query.is_empty() => {
+            let current = state.search.current.map_or(0, |index| index + 1);
+            format!(
+                " {position}  /{}  {current}/{}  n/N matches  Esc clear  q quit ",
+                state.search.query,
+                state.search.matches.len()
+            )
+        }
+        ViewerMode::Reading => format!(
+            " {position}  x:{}  j/k scroll  / search  ? help  q quit ",
+            state.horizontal_scroll
+        ),
+    };
     frame.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(MUTED).bg(SURFACE)),
         status,
@@ -151,26 +170,66 @@ fn render_viewer(
         render_help(frame);
     }
 
-    bounds
+    (bounds, plain_lines)
 }
 
-fn action_for_key(key: KeyEvent, help_visible: bool) -> Option<Action> {
-    if help_visible {
+fn action_for_key(key: KeyEvent, state: &ViewerState) -> Option<Action> {
+    if state.show_help {
         return match key.code {
             KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => Some(Action::ToggleHelp),
             _ => None,
         };
     }
 
+    if state.mode == ViewerMode::SearchInput {
+        return match key {
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => Some(Action::SubmitSearch),
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => Some(Action::CancelSearch),
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } => Some(Action::SearchBackspace),
+            KeyEvent {
+                code: KeyCode::Char(character),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                ..
+            } => Some(Action::SearchCharacter(character)),
+            _ => None,
+        };
+    }
+
     match key {
         KeyEvent {
-            code: KeyCode::Char('q') | KeyCode::Esc,
+            code: KeyCode::Char('q'),
             ..
+        } => Some(Action::Quit),
+        KeyEvent {
+            code: KeyCode::Esc, ..
+        } if !state.search.query.is_empty() => Some(Action::ClearSearch),
+        KeyEvent {
+            code: KeyCode::Esc, ..
         } => Some(Action::Quit),
         KeyEvent {
             code: KeyCode::Char('?'),
             ..
         } => Some(Action::ToggleHelp),
+        KeyEvent {
+            code: KeyCode::Char('/'),
+            ..
+        } => Some(Action::EnterSearch),
+        KeyEvent {
+            code: KeyCode::Char('n'),
+            ..
+        } => Some(Action::NextMatch),
+        KeyEvent {
+            code: KeyCode::Char('N'),
+            ..
+        } => Some(Action::PreviousMatch),
         KeyEvent {
             code: KeyCode::Char('j') | KeyCode::Down,
             ..
@@ -232,8 +291,11 @@ fn render_help(frame: &mut Frame<'_>) {
         TuiLine::from("  l / Right         Pan right"),
         TuiLine::from("  g / Home          Go to beginning"),
         TuiLine::from("  G / End           Go to end"),
+        TuiLine::from("  /                 Search in page"),
+        TuiLine::from("  n / N             Next / previous match"),
+        TuiLine::from("  Esc               Clear active search"),
         TuiLine::from("  ?                 Close help"),
-        TuiLine::from("  q / Esc           Close help"),
+        TuiLine::from("  q                 Close help"),
     ];
     let popup = Paragraph::new(help)
         .style(Style::default().fg(TEXT).bg(OVERLAY))
@@ -266,12 +328,32 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn to_tui_line(line: &crate::layout::Line) -> TuiLine<'static> {
-    let spans = line
-        .spans
-        .iter()
-        .map(|span| TuiSpan::styled(span.text.clone(), span_style(span, line.kind)))
-        .collect::<Vec<_>>();
+fn to_tui_line(
+    line: &crate::layout::Line,
+    line_index: usize,
+    search: &SearchState,
+) -> TuiLine<'static> {
+    let mut spans = Vec::new();
+    let mut byte_offset = 0;
+
+    for span in &line.spans {
+        let base_style = span_style(span, line.kind);
+        for character in span.text.chars() {
+            let match_index = search.matches.iter().position(|item| {
+                item.line == line_index && item.start <= byte_offset && byte_offset < item.end
+            });
+            let style = match match_index {
+                Some(index) if search.current == Some(index) => {
+                    base_style.fg(BASE).bg(ROSE).add_modifier(Modifier::BOLD)
+                }
+                Some(_) => base_style.fg(BASE).bg(GOLD),
+                None => base_style,
+            };
+            spans.push(TuiSpan::styled(character.to_string(), style));
+            byte_offset += character.len_utf8();
+        }
+    }
+
     TuiLine::from(spans).style(line_style(line.kind))
 }
 
@@ -322,10 +404,11 @@ fn span_style(span: &RenderedSpan, kind: LineKind) -> Style {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
-    use super::{ViewerState, render_viewer};
-    use crate::markdown::parse_markdown;
+    use super::{Action, ROSE, ViewerState, action_for_key, render_viewer};
+    use crate::{app::ViewBounds, markdown::parse_markdown};
 
     #[test]
     fn test_backend_renders_topic_and_document() {
@@ -349,6 +432,85 @@ mod tests {
             .collect();
         assert!(contents.contains("mman · example"));
         assert!(contents.contains("body text"));
+    }
+
+    #[test]
+    fn test_backend_highlights_search_matches_and_shows_match_count() {
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+        let document = parse_markdown("Needle and needle\n");
+        let mut state = ViewerState::default();
+        let bounds = ViewBounds {
+            line_count: 1,
+            viewport_height: 5,
+            widest_line: 19,
+            viewport_width: 58,
+        };
+        let lines = vec![String::from("  Needle and needle")];
+        state.apply(Action::EnterSearch, bounds, &lines);
+        for character in "needle".chars() {
+            state.apply(Action::SearchCharacter(character), bounds, &lines);
+        }
+        state.apply(Action::SubmitSearch, bounds, &lines);
+
+        terminal
+            .draw(|frame| {
+                render_viewer(frame, "example", &document, &mut state);
+            })
+            .expect("search results should render");
+
+        let buffer = terminal.backend().buffer();
+        let contents: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(contents.contains("/needle  1/2"));
+        assert!(buffer.content.iter().any(|cell| cell.bg == ROSE));
+    }
+
+    #[test]
+    fn escape_clears_an_active_search_before_quitting() {
+        let mut state = ViewerState::default();
+        state.search.query = String::from("needle");
+
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &state),
+            Some(Action::ClearSearch)
+        );
+
+        state.search.query.clear();
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &state),
+            Some(Action::Quit)
+        );
+    }
+
+    #[test]
+    fn search_mode_maps_text_editing_and_submission_keys() {
+        let state = ViewerState {
+            mode: crate::app::ViewerMode::SearchInput,
+            ..ViewerState::default()
+        };
+
+        assert_eq!(
+            action_for_key(
+                KeyEvent::new(KeyCode::Char('é'), KeyModifiers::NONE),
+                &state
+            ),
+            Some(Action::SearchCharacter('é'))
+        );
+        assert_eq!(
+            action_for_key(
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                &state
+            ),
+            Some(Action::SearchBackspace)
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &state),
+            Some(Action::SubmitSearch)
+        );
+        assert_eq!(
+            action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &state),
+            Some(Action::CancelSearch)
+        );
     }
 
     #[test]

@@ -94,8 +94,8 @@ fn rose_pine_theme() -> &'static Theme {
             ),
             theme_item(
                 "variable.parameter",
-                color(224, 222, 244),
-                FontStyle::ITALIC,
+                color(156, 207, 216),
+                FontStyle::empty(),
             ),
         ],
     })
@@ -114,4 +114,23 @@ fn theme_item(scope: &str, foreground: Color, font_style: FontStyle) -> ThemeIte
 
 const fn color(r: u8, g: u8, b: u8) -> Color {
     Color { r, g, b, a: 255 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highlight_code;
+
+    #[test]
+    fn rust_parameters_use_plain_foam_text() {
+        let lines = highlight_code("fn byte_count(text: &str) {}\n", Some("rust"))
+            .expect("Rust highlighting should be available");
+        let parameter = lines
+            .iter()
+            .flatten()
+            .find(|span| span.text == "text")
+            .expect("the parameter should have a highlighted span");
+
+        assert_eq!(parameter.style.foreground, (156, 207, 216));
+        assert!(!parameter.style.italic);
+    }
 }

@@ -33,7 +33,8 @@ not implemented yet.
 - Retention of duplicate topic sources for future source selection.
 - Original, byte-for-byte Markdown output with `--raw`.
 - Automatic raw output for a plain topic when the session is non-interactive.
-- Interactive Markdown viewer with Rosé Pine colors and keyboard scrolling.
+- Interactive Markdown viewer with Rosé Pine colors, keyboard scrolling, and
+  case-insensitive in-page search with highlighted matches.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
 - Flush-left headings with indented body content for stronger visual hierarchy.
@@ -156,8 +157,12 @@ h / Left          Pan horizontally left
 l / Right         Pan horizontally right
 g / Home          Go to the beginning
 G / End           Go to the end
+/                 Enter in-page search
+n                 Go to the next match
+N                 Go to the previous match
+Esc               Clear the active search; quit when no search is active
 ?                 Toggle keybinding help
-q / Esc           Quit
+q                 Quit
 ```
 
 The initial viewer reflows content when the terminal is resized and restores
@@ -245,7 +250,6 @@ terminal-buffer rendering, and command-line output.
 The following documented goals are still planned:
 
 - Interactive topic picker
-- In-page search and match highlighting
 - Topic listing with `-l`
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
