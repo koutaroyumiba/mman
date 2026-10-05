@@ -1,5 +1,5 @@
 use mman::{
-    document::{Block, Document, Span, TextStyle},
+    document::{Block, Document, Link, Span, TextStyle},
     markdown::parse_markdown,
 };
 
@@ -15,6 +15,18 @@ fn styled(text: &str, emphasis: bool, strong: bool, inline_code: bool) -> Span {
             strong,
             inline_code,
         },
+        link: None,
+    }
+}
+
+fn linked(text: &str, destination: &str, title: Option<&str>, style: TextStyle) -> Span {
+    Span {
+        text: text.to_owned(),
+        style,
+        link: Some(Link {
+            destination: destination.to_owned(),
+            title: title.map(str::to_owned),
+        }),
     }
 }
 
@@ -68,6 +80,52 @@ fn combines_nested_inline_styles() {
             spans: vec![
                 plain("This is "),
                 styled("important", true, true, false),
+                plain("."),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn parses_link_destination_and_title() {
+    let document =
+        parse_markdown("See [ownership](../concepts/ownership.md \"Ownership guide\").\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![
+                plain("See "),
+                linked(
+                    "ownership",
+                    "../concepts/ownership.md",
+                    Some("Ownership guide"),
+                    TextStyle::default(),
+                ),
+                plain("."),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn link_preserves_nested_text_style() {
+    let document = parse_markdown("Read [**Rust**](https://www.rust-lang.org/).\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![
+                plain("Read "),
+                linked(
+                    "Rust",
+                    "https://www.rust-lang.org/",
+                    None,
+                    TextStyle {
+                        strong: true,
+                        ..TextStyle::default()
+                    },
+                ),
                 plain("."),
             ],
         }]

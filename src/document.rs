@@ -23,6 +23,13 @@ pub enum Block {
 pub struct Span {
     pub text: String,
     pub style: TextStyle,
+    pub link: Option<Link>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub destination: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

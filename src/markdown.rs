@@ -1,6 +1,6 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 
-use crate::document::{Block, Document, Span, TextStyle};
+use crate::document::{Block, Document, Link, Span, TextStyle};
 
 enum BlockBuilder {
     Heading {
@@ -24,10 +24,10 @@ impl BlockBuilder {
         }
     }
 
-    fn push_text(&mut self, text: String, style: TextStyle) {
+    fn push_text(&mut self, text: String, style: TextStyle, link: Option<Link>) {
         match self {
             Self::Heading { spans, .. } | Self::Paragraph { spans } => {
-                spans.push(Span { text, style });
+                spans.push(Span { text, style, link });
             }
             Self::CodeBlock {
                 text: code_text, ..
@@ -40,6 +40,7 @@ impl BlockBuilder {
 struct InlineStyleState {
     emphasis_depth: usize,
     strong_depth: usize,
+    link: Option<Link>,
 }
 
 impl InlineStyleState {
@@ -82,6 +83,14 @@ pub fn parse_markdown(source: &str) -> Document {
                     text: String::new(),
                 });
             }
+            Event::Start(Tag::Link {
+                dest_url, title, ..
+            }) => {
+                inline_style.link = Some(Link {
+                    destination: dest_url.into_string(),
+                    title: (!title.is_empty()).then(|| title.into_string()),
+                });
+            }
             Event::Start(Tag::Emphasis) => {
                 inline_style.emphasis_depth += 1;
             }
@@ -90,7 +99,11 @@ pub fn parse_markdown(source: &str) -> Document {
             }
             Event::Text(text) => {
                 if let Some(block) = current_block.as_mut() {
-                    block.push_text(text.into_string(), inline_style.text_style(false));
+                    block.push_text(
+                        text.into_string(),
+                        inline_style.text_style(false),
+                        inline_style.link.clone(),
+                    );
                 }
             }
             Event::Code(code) => {
@@ -98,6 +111,7 @@ pub fn parse_markdown(source: &str) -> Document {
                     &mut current_block,
                     code.into_string(),
                     inline_style.text_style(true),
+                    inline_style.link.clone(),
                 );
             }
             Event::End(TagEnd::Emphasis) => {
@@ -105,6 +119,9 @@ pub fn parse_markdown(source: &str) -> Document {
             }
             Event::End(TagEnd::Strong) => {
                 inline_style.strong_depth = inline_style.strong_depth.saturating_sub(1);
+            }
+            Event::End(TagEnd::Link) => {
+                inline_style.link = None;
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(BlockBuilder::Heading { level, spans }) = current_block.take() {
@@ -129,9 +146,9 @@ pub fn parse_markdown(source: &str) -> Document {
     document
 }
 
-fn push_span(block: &mut Option<BlockBuilder>, text: String, style: TextStyle) {
+fn push_span(block: &mut Option<BlockBuilder>, text: String, style: TextStyle, link: Option<Link>) {
     if let Some(spans) = block.as_mut().and_then(BlockBuilder::spans_mut) {
-        spans.push(Span { text, style });
+        spans.push(Span { text, style, link });
     }
 }
 
