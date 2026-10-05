@@ -296,6 +296,10 @@ mode selection, path handling, topic validation, page discovery, precedence,
 duplicate retention, raw loading, typo suggestions, viewer state transitions,
 terminal-buffer rendering, and command-line output.
 
+## License
+
+Licensed under the [MIT License](LICENSE).
+
 ## Not implemented yet
 
 The following documented goals are still planned:
