@@ -35,6 +35,7 @@ interactive topic picker, and an interactive Markdown viewer.
 - Interactive Markdown viewer with Rosé Pine colors, keyboard scrolling, and
   case-insensitive in-page search with highlighted matches.
 - Built-in topic picker with case-insensitive literal filtering.
+- Stable alphabetical topic listing with `-l` or `--list`.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
 - Flush-left headings with indented body content for stronger visual hierarchy.
@@ -117,6 +118,7 @@ Options:
   -M <PATHS>     Override MMANPATH for this invocation
       --raw      Print the original Markdown
       --where    Print the selected page's source path
+  -l, --list     List available topics
   -h, --help     Print help
   -V, --version  Print version
 ```
@@ -131,6 +133,15 @@ mman
 
 Type to filter topic names, use the arrow keys or `j`/`k` to move, press `Enter`
 to open the selected topic, and press `Esc` or `q` to quit.
+
+### List available topics
+
+```sh
+mman -l
+```
+
+Listing prints each unique topic once in alphabetical order, including nested
+topics such as `concepts/ownership`.
 
 ### Print original Markdown
 
@@ -235,7 +246,8 @@ interpret embedded HTML, fetch remote resources, or invoke external renderers.
 
 ## Exit behavior
 
-- Page content and `--where` results are written to standard output.
+- Page content, topic listings, and `--where` results are written to standard
+  output.
 - Warnings and errors are written to standard error.
 - Successful commands return status `0`.
 - Invalid usage, configuration failures, and missing topics return a non-zero
@@ -260,7 +272,6 @@ terminal-buffer rendering, and command-line output.
 
 The following documented goals are still planned:
 
-- Topic listing with `-l`
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
 - Internal links and navigation history

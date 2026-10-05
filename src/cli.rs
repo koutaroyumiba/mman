@@ -18,6 +18,14 @@ pub struct Cli {
     #[arg(long = "where", requires = "topic", conflicts_with = "raw")]
     pub where_path: bool,
 
+    /// List available topics
+    #[arg(
+        short = 'l',
+        long = "list",
+        conflicts_with_all = ["raw", "where_path", "topic"]
+    )]
+    pub list: bool,
+
     /// Topic to open.
     #[arg(value_name = "TOPIC")]
     pub topic: Option<String>,
@@ -41,6 +49,7 @@ pub enum ExecutionMode {
     Viewer { topic: String },
     Raw { topic: String },
     Where { topic: String },
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +73,10 @@ pub fn select_mode(
     cli: &Cli,
     terminals: TerminalState,
 ) -> Result<ExecutionMode, ModeSelectionError> {
+    if cli.list {
+        return Ok(ExecutionMode::List);
+    }
+
     let Some(topic) = cli.topic.as_ref() else {
         return if terminals.is_interactive() && !cli.raw && !cli.where_path {
             Ok(ExecutionMode::Picker)
@@ -102,6 +115,7 @@ mod tests {
         assert_eq!(cli.topic.as_deref(), Some("concepts/ownership"));
         assert!(!cli.raw);
         assert!(!cli.where_path);
+        assert!(!cli.list);
     }
 
     #[test]
@@ -125,6 +139,35 @@ mod tests {
         let result = Cli::try_parse_from(["mman", "--raw", "--where", "concepts/ownership"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_list_without_a_topic() {
+        let cli = Cli::try_parse_from(["mman", "-l"]).expect("arguments should parse");
+
+        assert!(cli.list);
+        assert!(cli.topic.is_none());
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: false,
+                    stdout: false,
+                }
+            ),
+            Ok(ExecutionMode::List)
+        );
+    }
+
+    #[test]
+    fn rejects_list_with_topic_or_another_output_mode() {
+        for arguments in [
+            vec!["mman", "-l", "ownership"],
+            vec!["mman", "-l", "--raw"],
+            vec!["mman", "-l", "--where"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
     }
 
     #[test]

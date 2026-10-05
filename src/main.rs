@@ -68,6 +68,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 run_viewer(&topic, &source)?;
             }
         }
+        ExecutionMode::List => {
+            let mut stdout = io::stdout().lock();
+            for topic in page_index.topics() {
+                writeln!(stdout, "{topic}")?;
+            }
+        }
     }
 
     Ok(())
