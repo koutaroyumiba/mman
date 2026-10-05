@@ -6,7 +6,7 @@ use std::{env, error::Error, path::PathBuf};
 
 use clap::Parser;
 use mman::{
-    cli::Cli,
+    cli::{Cli, ExecutionMode, TerminalState, select_mode},
     pages::PageIndex,
     paths::{search_paths, validate_roots},
 };
@@ -23,10 +23,13 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    if !interactive && cli.topic.is_none() {
-        return Err("topic is required in a non-interactive session".into());
-    }
+    let mode = select_mode(
+        &cli,
+        TerminalState {
+            stdin: io::stdin().is_terminal(),
+            stdout: io::stdout().is_terminal(),
+        },
+    )?;
 
     let env_path = env::var_os("MMANPATH");
     let home = env::var_os("HOME").map(PathBuf::from);
@@ -40,23 +43,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
     let page_index = PageIndex::discover(&validated_paths.roots)?;
 
-    if cli.where_path || !interactive || cli.raw {
-        let Some(topic) = cli.topic.as_deref() else {
-            if !interactive {
-                return Err("topic is required in a non-interactive session".into());
-            }
-            return Err("topic required for --where".into());
-        };
-
-        let page = page_index.lookup(topic)?;
-
-        if cli.where_path {
+    match mode {
+        ExecutionMode::Where { topic } => {
+            let page = page_index.lookup(&topic)?;
             println!("{}", page.path.display());
-        } else {
+        }
+        ExecutionMode::Raw { topic } => {
+            let page = page_index.lookup(&topic)?;
             let raw_content = page.read_raw()?;
             let mut stdout = io::stdout().lock();
             stdout.write_all(&raw_content)?;
         }
+        ExecutionMode::Picker | ExecutionMode::Viewer { .. } => {}
     }
 
     Ok(())
