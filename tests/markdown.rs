@@ -1,5 +1,5 @@
 use mman::{
-    document::{Block, Document, Link, Span, TextStyle},
+    document::{Block, Document, Link, ListItem, Span, TextStyle},
     markdown::parse_markdown,
 };
 
@@ -176,6 +176,81 @@ fn link_preserves_nested_text_style() {
                     },
                 ),
                 plain("."),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn parses_block_quote_with_nested_blocks() {
+    let document = parse_markdown("> **Borrowing** avoids moving a value.\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::BlockQuote {
+            blocks: vec![Block::Paragraph {
+                spans: vec![
+                    styled("Borrowing", false, true, false),
+                    plain(" avoids moving a value."),
+                ],
+            }],
+        }]
+    );
+}
+
+#[test]
+fn parses_unordered_list_items() {
+    let document = parse_markdown("- ownership\n- borrowing\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::List {
+            start: None,
+            items: vec![
+                ListItem {
+                    blocks: vec![Block::Paragraph {
+                        spans: vec![plain("ownership")],
+                    }],
+                },
+                ListItem {
+                    blocks: vec![Block::Paragraph {
+                        spans: vec![plain("borrowing")],
+                    }],
+                },
+            ],
+        }]
+    );
+}
+
+#[test]
+fn parses_ordered_list_start_and_nested_list() {
+    let document = parse_markdown("3. first\n4. second\n   - nested\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::List {
+            start: Some(3),
+            items: vec![
+                ListItem {
+                    blocks: vec![Block::Paragraph {
+                        spans: vec![plain("first")],
+                    }],
+                },
+                ListItem {
+                    blocks: vec![
+                        Block::Paragraph {
+                            spans: vec![plain("second")],
+                        },
+                        Block::List {
+                            start: None,
+                            items: vec![ListItem {
+                                blocks: vec![Block::Paragraph {
+                                    spans: vec![plain("nested")],
+                                }],
+                            }],
+                        },
+                    ],
+                },
             ],
         }]
     );

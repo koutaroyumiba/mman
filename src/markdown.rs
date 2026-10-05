@@ -1,8 +1,21 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 
-use crate::document::{Block, Document, Link, Span, TextStyle};
+use crate::document::{Block, Document, Link, ListItem, Span, TextStyle};
 
-enum BlockBuilder {
+enum Frame {
+    Root {
+        blocks: Vec<Block>,
+    },
+    BlockQuote {
+        blocks: Vec<Block>,
+    },
+    List {
+        start: Option<u64>,
+        items: Vec<ListItem>,
+    },
+    Item {
+        blocks: Vec<Block>,
+    },
     Heading {
         level: u8,
         spans: Vec<Span>,
@@ -14,28 +27,6 @@ enum BlockBuilder {
         language: Option<String>,
         text: String,
     },
-}
-
-impl BlockBuilder {
-    fn spans_mut(&mut self) -> Option<&mut Vec<Span>> {
-        match self {
-            Self::Heading { spans, .. } | Self::Paragraph { spans } => Some(spans),
-            Self::CodeBlock { .. } => None,
-        }
-    }
-
-    fn push_text(&mut self, text: String, style: TextStyle, link: Option<Link>) {
-        let text = sanitize_text(&text);
-
-        match self {
-            Self::Heading { spans, .. } | Self::Paragraph { spans } => {
-                append_span(spans, text, style, link);
-            }
-            Self::CodeBlock {
-                text: code_text, ..
-            } => code_text.push_str(&text),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -56,20 +47,17 @@ impl InlineStyleState {
 }
 
 pub fn parse_markdown(source: &str) -> Document {
-    let mut document = Document::default();
-    let mut current_block = None;
+    let mut frames = vec![Frame::Root { blocks: Vec::new() }];
     let mut inline_style = InlineStyleState::default();
 
     for event in Parser::new(source) {
         match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                current_block = Some(BlockBuilder::Heading {
-                    level: heading_level(level),
-                    spans: Vec::new(),
-                });
-            }
+            Event::Start(Tag::Heading { level, .. }) => frames.push(Frame::Heading {
+                level: heading_level(level),
+                spans: Vec::new(),
+            }),
             Event::Start(Tag::Paragraph) => {
-                current_block = Some(BlockBuilder::Paragraph { spans: Vec::new() });
+                frames.push(Frame::Paragraph { spans: Vec::new() });
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 let language = match kind {
@@ -80,10 +68,22 @@ pub fn parse_markdown(source: &str) -> Document {
                         .map(sanitize_text),
                     CodeBlockKind::Indented => None,
                 };
-                current_block = Some(BlockBuilder::CodeBlock {
+                frames.push(Frame::CodeBlock {
                     language,
                     text: String::new(),
                 });
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                frames.push(Frame::BlockQuote { blocks: Vec::new() });
+            }
+            Event::Start(Tag::List(start)) => {
+                frames.push(Frame::List {
+                    start,
+                    items: Vec::new(),
+                });
+            }
+            Event::Start(Tag::Item) => {
+                frames.push(Frame::Item { blocks: Vec::new() });
             }
             Event::Start(Tag::Link {
                 dest_url, title, ..
@@ -93,80 +93,121 @@ pub fn parse_markdown(source: &str) -> Document {
                     title: (!title.is_empty()).then(|| sanitize_text(&title)),
                 });
             }
-            Event::Start(Tag::Emphasis) => {
-                inline_style.emphasis_depth += 1;
-            }
-            Event::Start(Tag::Strong) => {
-                inline_style.strong_depth += 1;
-            }
-            Event::Text(text) => {
-                if let Some(block) = current_block.as_mut() {
-                    block.push_text(
-                        text.into_string(),
-                        inline_style.text_style(false),
-                        inline_style.link.clone(),
-                    );
-                }
-            }
-            Event::Code(code) => {
-                push_span(
-                    &mut current_block,
-                    code.into_string(),
-                    inline_style.text_style(true),
-                    inline_style.link.clone(),
-                );
-            }
-            Event::SoftBreak => {
-                push_span(
-                    &mut current_block,
-                    String::from(" "),
-                    inline_style.text_style(false),
-                    inline_style.link.clone(),
-                );
-            }
-            Event::HardBreak => {
-                push_span(
-                    &mut current_block,
-                    String::from("\n"),
-                    inline_style.text_style(false),
-                    inline_style.link.clone(),
-                );
-            }
+            Event::Start(Tag::Emphasis) => inline_style.emphasis_depth += 1,
+            Event::Start(Tag::Strong) => inline_style.strong_depth += 1,
+            Event::Text(text) => push_text(
+                &mut frames,
+                text.into_string(),
+                inline_style.text_style(false),
+                inline_style.link.clone(),
+            ),
+            Event::Code(code) => push_inline_span(
+                &mut frames,
+                code.into_string(),
+                inline_style.text_style(true),
+                inline_style.link.clone(),
+            ),
+            Event::SoftBreak => push_inline_span(
+                &mut frames,
+                String::from(" "),
+                inline_style.text_style(false),
+                inline_style.link.clone(),
+            ),
+            Event::HardBreak => push_inline_span(
+                &mut frames,
+                String::from("\n"),
+                inline_style.text_style(false),
+                inline_style.link.clone(),
+            ),
             Event::End(TagEnd::Emphasis) => {
                 inline_style.emphasis_depth = inline_style.emphasis_depth.saturating_sub(1);
             }
             Event::End(TagEnd::Strong) => {
                 inline_style.strong_depth = inline_style.strong_depth.saturating_sub(1);
             }
-            Event::End(TagEnd::Link) => {
-                inline_style.link = None;
-            }
+            Event::End(TagEnd::Link) => inline_style.link = None,
             Event::End(TagEnd::Heading(_)) => {
-                if let Some(BlockBuilder::Heading { level, spans }) = current_block.take() {
-                    document.blocks.push(Block::Heading { level, spans });
+                if let Some(Frame::Heading { level, spans }) = frames.pop() {
+                    push_block(&mut frames, Block::Heading { level, spans });
                 }
             }
             Event::End(TagEnd::Paragraph) => {
-                if let Some(BlockBuilder::Paragraph { spans }) = current_block.take() {
-                    document.blocks.push(Block::Paragraph { spans });
+                if let Some(Frame::Paragraph { spans }) = frames.pop() {
+                    push_block(&mut frames, Block::Paragraph { spans });
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
-                if let Some(BlockBuilder::CodeBlock { language, text }) = current_block.take() {
-                    document.blocks.push(Block::CodeBlock { language, text });
+                if let Some(Frame::CodeBlock { language, text }) = frames.pop() {
+                    push_block(&mut frames, Block::CodeBlock { language, text });
                 }
             }
-            Event::Rule => document.blocks.push(Block::ThematicBreak),
+            Event::End(TagEnd::BlockQuote(_)) => {
+                if let Some(Frame::BlockQuote { blocks }) = frames.pop() {
+                    push_block(&mut frames, Block::BlockQuote { blocks });
+                }
+            }
+            Event::End(TagEnd::Item) => {
+                if let Some(Frame::Item { blocks }) = frames.pop()
+                    && let Some(Frame::List { items, .. }) = frames.last_mut()
+                {
+                    items.push(ListItem { blocks });
+                }
+            }
+            Event::End(TagEnd::List(_)) => {
+                if let Some(Frame::List { start, items }) = frames.pop() {
+                    push_block(&mut frames, Block::List { start, items });
+                }
+            }
+            Event::Rule => push_block(&mut frames, Block::ThematicBreak),
             _ => {}
         }
     }
 
-    document
+    match frames.pop() {
+        Some(Frame::Root { blocks }) => Document { blocks },
+        _ => Document::default(),
+    }
 }
 
-fn push_span(block: &mut Option<BlockBuilder>, text: String, style: TextStyle, link: Option<Link>) {
-    if let Some(spans) = block.as_mut().and_then(BlockBuilder::spans_mut) {
-        append_span(spans, sanitize_text(&text), style, link);
+fn push_block(frames: &mut [Frame], block: Block) {
+    match frames.last_mut() {
+        Some(Frame::Root { blocks })
+        | Some(Frame::BlockQuote { blocks })
+        | Some(Frame::Item { blocks }) => blocks.push(block),
+        _ => {}
+    }
+}
+
+fn push_text(frames: &mut [Frame], text: String, style: TextStyle, link: Option<Link>) {
+    let text = sanitize_text(&text);
+
+    if let Some(Frame::CodeBlock {
+        text: code_text, ..
+    }) = frames.last_mut()
+    {
+        code_text.push_str(&text);
+    } else {
+        push_inline_span(frames, text, style, link);
+    }
+}
+
+fn push_inline_span(frames: &mut [Frame], text: String, style: TextStyle, link: Option<Link>) {
+    let text = sanitize_text(&text);
+
+    match frames.last_mut() {
+        Some(Frame::Heading { spans, .. }) | Some(Frame::Paragraph { spans }) => {
+            append_span(spans, text, style, link);
+        }
+        Some(Frame::Item { blocks }) => {
+            if let Some(Block::Paragraph { spans }) = blocks.last_mut() {
+                append_span(spans, text, style, link);
+            } else {
+                blocks.push(Block::Paragraph {
+                    spans: vec![Span { text, style, link }],
+                });
+            }
+        }
+        _ => {}
     }
 }
 

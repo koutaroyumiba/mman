@@ -16,7 +16,19 @@ pub enum Block {
         language: Option<String>,
         text: String,
     },
+    BlockQuote {
+        blocks: Vec<Block>,
+    },
+    List {
+        start: Option<u64>,
+        items: Vec<ListItem>,
+    },
     ThematicBreak,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItem {
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
