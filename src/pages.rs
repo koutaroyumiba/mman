@@ -154,6 +154,41 @@ impl PageIndex {
         self.pages.keys().map(|item| item.as_str())
     }
 
+    /// Suggests similar topics, ordered by similarity and then alphabetically.
+    pub fn suggestions(&self, topic: &str, limit: usize) -> Vec<&str> {
+        let query = topic.to_lowercase();
+        let threshold = (query.chars().count() / 3).clamp(1, 3);
+        let mut matches: Vec<(usize, &str)> = self
+            .pages
+            .keys()
+            .filter_map(|candidate| {
+                if candidate == topic {
+                    return None;
+                }
+
+                let lowercase_candidate = candidate.to_lowercase();
+                let final_component = lowercase_candidate
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&lowercase_candidate);
+                let distance = levenshtein_distance(&query, &lowercase_candidate)
+                    .min(levenshtein_distance(&query, final_component));
+
+                (distance <= threshold).then_some((distance, candidate.as_str()))
+            })
+            .collect();
+
+        matches.sort_by(
+            |(left_distance, left_topic), (right_distance, right_topic)| {
+                left_distance
+                    .cmp(right_distance)
+                    .then(left_topic.cmp(right_topic))
+            },
+        );
+        matches.truncate(limit);
+        matches.into_iter().map(|(_, topic)| topic).collect()
+    }
+
     /// Checks if the index contains any topics
     pub fn is_empty(&self) -> bool {
         self.pages.is_empty()
@@ -168,6 +203,28 @@ impl PageIndex {
             None => Err(LookupError::NotFound(normalized_topic)),
         }
     }
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let right_characters: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_characters.len()).collect();
+
+    for (left_index, left_character) in left.chars().enumerate() {
+        let mut current = Vec::with_capacity(right_characters.len() + 1);
+        current.push(left_index + 1);
+
+        for (right_index, right_character) in right_characters.iter().enumerate() {
+            let deletion = previous[right_index + 1] + 1;
+            let insertion = current[right_index] + 1;
+            let substitution =
+                previous[right_index] + usize::from(left_character != *right_character);
+            current.push(deletion.min(insertion).min(substitution));
+        }
+
+        previous = current;
+    }
+
+    previous[right_characters.len()]
 }
 
 pub fn discover_pages(root: &Path) -> io::Result<Vec<Page>> {
@@ -557,6 +614,65 @@ mod tests {
             index.lookup("ownership"),
             Err(LookupError::NotFound(topic)) if topic == "ownership"
         ));
+    }
+
+    #[test]
+    fn suggestions_match_typo_against_final_topic_component() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let concepts = directory.path().join("concepts");
+
+        fs::create_dir(&concepts).expect("concepts directory should be created");
+        fs::write(concepts.join("ownership.md"), "# Ownership")
+            .expect("ownership page should be written");
+        fs::write(directory.path().join("git.md"), "# Git").expect("git page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert_eq!(index.suggestions("owership", 5), vec!["concepts/ownership"]);
+    }
+
+    #[test]
+    fn suggestions_are_ranked_then_alphabetical_and_limited() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        for topic in ["bat", "dat", "fat", "hat", "mat", "pat"] {
+            fs::write(directory.path().join(format!("{topic}.md")), "# Page")
+                .expect("page should be written");
+        }
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert_eq!(
+            index.suggestions("cat", 5),
+            vec!["bat", "dat", "fat", "hat", "mat"]
+        );
+    }
+
+    #[test]
+    fn suggestions_are_case_insensitive() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("Ownership.md"), "# Ownership")
+            .expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert_eq!(index.suggestions("ownership", 5), vec!["Ownership"]);
+    }
+
+    #[test]
+    fn suggestions_omit_unrelated_topics() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        fs::write(directory.path().join("git.md"), "# Git").expect("page should be written");
+
+        let index = PageIndex::discover(&[directory.path().to_path_buf()])
+            .expect("page index should be built");
+
+        assert!(index.suggestions("ownership", 5).is_empty());
     }
 
     #[test]
