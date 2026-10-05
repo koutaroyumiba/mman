@@ -9,7 +9,7 @@ use mman::{
     cli::{Cli, ExecutionMode, TerminalState, select_mode},
     pages::PageIndex,
     paths::{search_paths, validate_roots},
-    tui::run_viewer,
+    tui::{run_picker, run_viewer},
 };
 
 fn main() -> ExitCode {
@@ -60,7 +60,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             let source = String::from_utf8(page.read_raw()?)?;
             run_viewer(&topic, &source)?;
         }
-        ExecutionMode::Picker => {}
+        ExecutionMode::Picker => {
+            let topics: Vec<String> = page_index.topics().map(str::to_owned).collect();
+            if let Some(topic) = run_picker(&topics, &validated_paths.roots)? {
+                let page = page_index.lookup(&topic)?;
+                let source = String::from_utf8(page.read_raw()?)?;
+                run_viewer(&topic, &source)?;
+            }
+        }
     }
 
     Ok(())

@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -20,6 +20,7 @@ use crate::{
     app::{Action, SearchState, ViewBounds, ViewerMode, ViewerState},
     layout::{LineKind, RenderedSpan, layout_document},
     markdown::parse_markdown,
+    picker::{PickerAction, PickerState},
 };
 
 const BASE: Color = Color::Rgb(25, 23, 36);
@@ -55,6 +56,29 @@ impl Drop for TerminalGuard {
     }
 }
 
+pub fn run_picker(topics: &[String], roots: &[PathBuf]) -> io::Result<Option<String>> {
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    let mut state = PickerState::new(topics);
+    let mut viewport_height = 0;
+
+    while !state.should_quit {
+        terminal.draw(|frame| {
+            viewport_height = render_picker(frame, topics, roots, &state);
+        })?;
+
+        if let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+            && let Some(action) = picker_action_for_key(key)
+        {
+            state.apply(action, topics, viewport_height);
+        }
+    }
+
+    Ok(state.selected_topic)
+}
+
 pub fn run_viewer(topic: &str, source: &str) -> io::Result<()> {
     let document = parse_markdown(source);
     let _guard = TerminalGuard::enter()?;
@@ -86,6 +110,136 @@ pub fn run_viewer(topic: &str, source: &str) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn render_picker(
+    frame: &mut Frame<'_>,
+    topics: &[String],
+    roots: &[PathBuf],
+    state: &PickerState,
+) -> usize {
+    let regions = RatatuiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(frame.area());
+    let input = Paragraph::new(format!("> {}", state.filter))
+        .style(Style::default().fg(TEXT).bg(BASE))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Find topic ")
+                .border_style(Style::default().fg(IRIS)),
+        );
+    frame.render_widget(input, regions[0]);
+
+    let result_lines = if state.filtered.is_empty() {
+        let message = if topics.is_empty() {
+            "  No topics available"
+        } else {
+            "  No matching topics"
+        };
+        vec![TuiLine::styled(message, Style::default().fg(MUTED))]
+    } else {
+        state
+            .filtered
+            .iter()
+            .enumerate()
+            .filter_map(|(visible_index, topic_index)| {
+                let topic = topics.get(*topic_index)?;
+                let marker = if visible_index == state.selected {
+                    "› "
+                } else {
+                    "  "
+                };
+                let style = if visible_index == state.selected {
+                    Style::default()
+                        .fg(BASE)
+                        .bg(IRIS)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(TEXT).bg(BASE)
+                };
+                Some(TuiLine::styled(
+                    format!("{marker}{}", terminal_safe_text(topic)),
+                    style,
+                ))
+            })
+            .collect()
+    };
+    let results = Paragraph::new(result_lines)
+        .style(Style::default().fg(TEXT).bg(BASE))
+        .scroll((state.scroll.min(u16::MAX as usize) as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Topics ")
+                .border_style(Style::default().fg(MUTED)),
+        );
+    frame.render_widget(results, regions[1]);
+
+    let roots = roots
+        .iter()
+        .map(|root| terminal_safe_text(&root.display().to_string()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let status = format!(
+        " {}/{} topics  ↑/↓ or j/k move  Enter open  Esc/q quit  roots: {roots} ",
+        state.filtered.len(),
+        topics.len()
+    );
+    frame.render_widget(
+        Paragraph::new(status).style(Style::default().fg(MUTED).bg(SURFACE)),
+        regions[2],
+    );
+
+    regions[1].height.saturating_sub(2) as usize
+}
+
+fn picker_action_for_key(key: KeyEvent) -> Option<PickerAction> {
+    match key {
+        KeyEvent {
+            code: KeyCode::Esc | KeyCode::Char('q'),
+            ..
+        } => Some(PickerAction::Quit),
+        KeyEvent {
+            code: KeyCode::Enter,
+            ..
+        } => Some(PickerAction::Select),
+        KeyEvent {
+            code: KeyCode::Down | KeyCode::Char('j'),
+            ..
+        } => Some(PickerAction::MoveDown),
+        KeyEvent {
+            code: KeyCode::Up | KeyCode::Char('k'),
+            ..
+        } => Some(PickerAction::MoveUp),
+        KeyEvent {
+            code: KeyCode::Backspace,
+            ..
+        } => Some(PickerAction::Backspace),
+        KeyEvent {
+            code: KeyCode::Char(character),
+            modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            ..
+        } => Some(PickerAction::Input(character)),
+        _ => None,
+    }
+}
+
+fn terminal_safe_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn render_viewer(
@@ -404,11 +558,66 @@ fn span_style(span: &RenderedSpan, kind: LineKind) -> Style {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
-    use super::{Action, ROSE, ViewerState, action_for_key, render_viewer};
+    use super::{
+        Action, PickerAction, PickerState, ROSE, ViewerState, action_for_key,
+        picker_action_for_key, render_picker, render_viewer,
+    };
     use crate::{app::ViewBounds, markdown::parse_markdown};
+
+    #[test]
+    fn test_backend_renders_picker_results_and_root_context() {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+        let topics = vec![
+            String::from("algorithms/binary-search"),
+            String::from("concepts/ownership"),
+        ];
+        let roots = vec![PathBuf::from("/manuals")];
+        let state = PickerState::new(&topics);
+
+        terminal
+            .draw(|frame| {
+                render_picker(frame, &topics, &roots, &state);
+            })
+            .expect("picker should render");
+
+        let contents: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(contents.contains("Find topic"));
+        assert!(contents.contains("algorithms/binary-search"));
+        assert!(contents.contains("2/2 topics"));
+        assert!(contents.contains("/manuals"));
+    }
+
+    #[test]
+    fn picker_keys_map_to_filter_navigation_and_selection() {
+        assert_eq!(
+            picker_action_for_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(PickerAction::Input('x'))
+        );
+        assert_eq!(
+            picker_action_for_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Some(PickerAction::MoveDown)
+        );
+        assert_eq!(
+            picker_action_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(PickerAction::Select)
+        );
+        assert_eq!(
+            picker_action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(PickerAction::Quit)
+        );
+    }
 
     #[test]
     fn test_backend_renders_topic_and_document() {

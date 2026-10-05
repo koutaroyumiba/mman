@@ -9,9 +9,8 @@
 ## Status
 
 `mman` is under active development. The current version supports deterministic
-page discovery, exact topic lookup, raw Markdown output, source-path lookup, and
-a minimal interactive Markdown viewer. The topic picker shown in the preview is
-not implemented yet.
+page discovery, exact topic lookup, raw Markdown output, source-path lookup, an
+interactive topic picker, and an interactive Markdown viewer.
 
 ## Preview
 
@@ -35,6 +34,7 @@ not implemented yet.
 - Automatic raw output for a plain topic when the session is non-interactive.
 - Interactive Markdown viewer with Rosé Pine colors, keyboard scrolling, and
   case-insensitive in-page search with highlighted matches.
+- Built-in topic picker with case-insensitive literal filtering.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
 - Flush-left headings with indented body content for stronger visual hierarchy.
@@ -120,6 +120,17 @@ Options:
   -h, --help     Print help
   -V, --version  Print version
 ```
+
+### Pick a topic interactively
+
+Run `mman` without a topic in an interactive terminal:
+
+```sh
+mman
+```
+
+Type to filter topic names, use the arrow keys or `j`/`k` to move, press `Enter`
+to open the selected topic, and press `Esc` or `q` to quit.
 
 ### Print original Markdown
 
@@ -249,7 +260,6 @@ terminal-buffer rendering, and command-line output.
 
 The following documented goals are still planned:
 
-- Interactive topic picker
 - Topic listing with `-l`
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
