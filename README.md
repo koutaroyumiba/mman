@@ -29,7 +29,7 @@ interactive topic picker, and an interactive Markdown viewer.
 - Nested topics such as `concepts/ownership`.
 - Optional `.md` suffix when entering a topic.
 - Direct-page precedence over `index.md` within the same root.
-- Retention of duplicate topic sources for future source selection.
+- Interactive duplicate-source selection with `-s` or `--select`.
 - Original, byte-for-byte Markdown output with `--raw`.
 - Automatic raw output for a plain topic when the session is non-interactive.
 - Interactive Markdown viewer with Rosé Pine colors, keyboard scrolling, and
@@ -120,6 +120,7 @@ Options:
   -M <PATHS>           Override MMANPATH for this invocation
       --raw            Print the original Markdown
       --where          Print the selected page's source path
+  -s, --select         Select among duplicate page sources
   -l, --list           List available topics
   -k, --search <TERM>  Search topic names and page content
   -h, --help           Print help
@@ -136,6 +137,16 @@ mman
 
 Type to filter topic names, use the arrow keys or `j`/`k` to move, press `Enter`
 to open the selected topic, and press `Esc` or `q` to quit.
+
+### Select a duplicate source
+
+```sh
+mman --select concepts/ownership
+```
+
+When a topic exists in multiple roots, the source picker displays each full
+path. A topic with only one source opens directly. Source selection requires an
+interactive terminal.
 
 ### List available topics
 
@@ -287,7 +298,6 @@ terminal-buffer rendering, and command-line output.
 
 The following documented goals are still planned:
 
-- Interactive duplicate selection with `--select`
 - Internal links and navigation history
 - Additional viewer controls such as search and link focus
 - Panic-hook and interruption hardening for terminal restoration

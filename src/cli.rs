@@ -18,11 +18,20 @@ pub struct Cli {
     #[arg(long = "where", requires = "topic", conflicts_with = "raw")]
     pub where_path: bool,
 
+    /// Select among duplicate page sources
+    #[arg(
+        short = 's',
+        long = "select",
+        requires = "topic",
+        conflicts_with_all = ["raw", "where_path", "list", "search"]
+    )]
+    pub select: bool,
+
     /// List available topics
     #[arg(
         short = 'l',
         long = "list",
-        conflicts_with_all = ["raw", "where_path", "search", "topic"]
+        conflicts_with_all = ["raw", "where_path", "select", "search", "topic"]
     )]
     pub list: bool,
 
@@ -31,7 +40,7 @@ pub struct Cli {
         short = 'k',
         long = "search",
         value_name = "TERM",
-        conflicts_with_all = ["raw", "where_path", "list", "topic"],
+        conflicts_with_all = ["raw", "where_path", "select", "list", "topic"],
         value_parser = clap::builder::NonEmptyStringValueParser::new()
     )]
     pub search: Option<String>,
@@ -61,11 +70,13 @@ pub enum ExecutionMode {
     Where { topic: String },
     List,
     Search { term: String },
+    Select { topic: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeSelectionError {
     TopicRequiredNonInteractive,
+    SelectionRequiresInteractive,
 }
 
 impl fmt::Display for ModeSelectionError {
@@ -73,6 +84,9 @@ impl fmt::Display for ModeSelectionError {
         match self {
             Self::TopicRequiredNonInteractive => {
                 formatter.write_str("topic is required in a non-interactive session")
+            }
+            Self::SelectionRequiresInteractive => {
+                formatter.write_str("source selection requires an interactive terminal")
             }
         }
     }
@@ -99,6 +113,16 @@ pub fn select_mode(
             Err(ModeSelectionError::TopicRequiredNonInteractive)
         };
     };
+
+    if cli.select {
+        return if terminals.is_interactive() {
+            Ok(ExecutionMode::Select {
+                topic: topic.clone(),
+            })
+        } else {
+            Err(ModeSelectionError::SelectionRequiresInteractive)
+        };
+    }
 
     if cli.where_path {
         return Ok(ExecutionMode::Where {
@@ -131,6 +155,7 @@ mod tests {
         assert!(!cli.raw);
         assert!(!cli.where_path);
         assert!(!cli.list);
+        assert!(!cli.select);
         assert!(cli.search.is_none());
     }
 
@@ -214,6 +239,47 @@ mod tests {
             vec!["mman", "-k", "term", "--raw"],
             vec!["mman", "-k", "term", "--where"],
             vec!["mman", "-k", "term", "-l"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn source_selection_requires_a_topic_and_interactive_terminal() {
+        assert!(Cli::try_parse_from(["mman", "--select"]).is_err());
+
+        let cli = Cli::try_parse_from(["mman", "-s", "ownership"]).expect("arguments should parse");
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: true,
+                    stdout: true,
+                }
+            ),
+            Ok(ExecutionMode::Select {
+                topic: String::from("ownership")
+            })
+        );
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: false,
+                    stdout: false,
+                }
+            ),
+            Err(ModeSelectionError::SelectionRequiresInteractive)
+        );
+    }
+
+    #[test]
+    fn source_selection_rejects_other_modes() {
+        for arguments in [
+            vec!["mman", "-s", "ownership", "--raw"],
+            vec!["mman", "-s", "ownership", "--where"],
+            vec!["mman", "-s", "ownership", "-l"],
+            vec!["mman", "-s", "ownership", "-k", "term"],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err());
         }

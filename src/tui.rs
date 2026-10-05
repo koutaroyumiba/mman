@@ -20,7 +20,7 @@ use crate::{
     app::{Action, SearchState, ViewBounds, ViewerMode, ViewerState},
     layout::{LineKind, RenderedSpan, layout_document},
     markdown::parse_markdown,
-    picker::{PickerAction, PickerState},
+    picker::{PickerAction, PickerState, SourcePickerAction, SourcePickerState},
 };
 
 const BASE: Color = Color::Rgb(25, 23, 36);
@@ -77,6 +77,29 @@ pub fn run_picker(topics: &[String], roots: &[PathBuf]) -> io::Result<Option<Str
     }
 
     Ok(state.selected_topic)
+}
+
+pub fn run_source_picker(topic: &str, sources: &[PathBuf]) -> io::Result<Option<usize>> {
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    let mut state = SourcePickerState::default();
+    let mut viewport_height = 0;
+
+    while !state.should_quit {
+        terminal.draw(|frame| {
+            viewport_height = render_source_picker(frame, topic, sources, &state);
+        })?;
+
+        if let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+            && let Some(action) = source_picker_action_for_key(key)
+        {
+            state.apply(action, sources.len(), viewport_height);
+        }
+    }
+
+    Ok(state.selected_index)
 }
 
 pub fn run_viewer(topic: &str, source: &str) -> io::Result<()> {
@@ -197,6 +220,88 @@ fn render_picker(
     );
 
     regions[1].height.saturating_sub(2) as usize
+}
+
+fn render_source_picker(
+    frame: &mut Frame<'_>,
+    topic: &str,
+    sources: &[PathBuf],
+    state: &SourcePickerState,
+) -> usize {
+    let regions = RatatuiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(frame.area());
+    let lines: Vec<TuiLine<'static>> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            let marker = if index == state.selected {
+                "› "
+            } else {
+                "  "
+            };
+            let style = if index == state.selected {
+                Style::default()
+                    .fg(BASE)
+                    .bg(IRIS)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TEXT).bg(BASE)
+            };
+            TuiLine::styled(
+                format!(
+                    "{marker}{}",
+                    terminal_safe_text(&source.display().to_string())
+                ),
+                style,
+            )
+        })
+        .collect();
+    let title = format!(" Select source · {} ", terminal_safe_text(topic));
+    let list = Paragraph::new(lines)
+        .style(Style::default().fg(TEXT).bg(BASE))
+        .scroll((state.scroll.min(u16::MAX as usize) as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(MUTED)),
+        );
+    frame.render_widget(list, regions[0]);
+
+    let status = format!(
+        " {} sources  ↑/↓ or j/k move  Enter open  Esc/q cancel ",
+        sources.len()
+    );
+    frame.render_widget(
+        Paragraph::new(status).style(Style::default().fg(MUTED).bg(SURFACE)),
+        regions[1],
+    );
+
+    regions[0].height.saturating_sub(2) as usize
+}
+
+fn source_picker_action_for_key(key: KeyEvent) -> Option<SourcePickerAction> {
+    match key {
+        KeyEvent {
+            code: KeyCode::Esc | KeyCode::Char('q'),
+            ..
+        } => Some(SourcePickerAction::Quit),
+        KeyEvent {
+            code: KeyCode::Enter,
+            ..
+        } => Some(SourcePickerAction::Select),
+        KeyEvent {
+            code: KeyCode::Down | KeyCode::Char('j'),
+            ..
+        } => Some(SourcePickerAction::MoveDown),
+        KeyEvent {
+            code: KeyCode::Up | KeyCode::Char('k'),
+            ..
+        } => Some(SourcePickerAction::MoveUp),
+        _ => None,
+    }
 }
 
 fn picker_action_for_key(key: KeyEvent) -> Option<PickerAction> {
@@ -564,8 +669,9 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::{
-        Action, PickerAction, PickerState, ROSE, ViewerState, action_for_key,
-        picker_action_for_key, render_picker, render_viewer,
+        Action, PickerAction, PickerState, ROSE, SourcePickerAction, SourcePickerState,
+        ViewerState, action_for_key, picker_action_for_key, render_picker, render_source_picker,
+        render_viewer, source_picker_action_for_key,
     };
     use crate::{app::ViewBounds, markdown::parse_markdown};
 
@@ -616,6 +722,50 @@ mod tests {
         assert_eq!(
             picker_action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             Some(PickerAction::Quit)
+        );
+    }
+
+    #[test]
+    fn test_backend_renders_duplicate_source_paths() {
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+        let sources = vec![
+            PathBuf::from("/first/manuals/ownership.md"),
+            PathBuf::from("/second/manuals/ownership/index.md"),
+        ];
+        let state = SourcePickerState::default();
+
+        terminal
+            .draw(|frame| {
+                render_source_picker(frame, "concepts/ownership", &sources, &state);
+            })
+            .expect("source picker should render");
+
+        let contents: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(contents.contains("Select source · concepts/ownership"));
+        assert!(contents.contains("/first/manuals/ownership.md"));
+        assert!(contents.contains("2 sources"));
+    }
+
+    #[test]
+    fn duplicate_source_picker_maps_navigation_selection_and_cancel() {
+        assert_eq!(
+            source_picker_action_for_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Some(SourcePickerAction::MoveDown)
+        );
+        assert_eq!(
+            source_picker_action_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(SourcePickerAction::Select)
+        );
+        assert_eq!(
+            source_picker_action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(SourcePickerAction::Quit)
         );
     }
 

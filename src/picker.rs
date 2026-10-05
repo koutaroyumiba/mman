@@ -93,9 +93,66 @@ impl PickerState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcePickerAction {
+    MoveDown,
+    MoveUp,
+    Select,
+    Quit,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SourcePickerState {
+    pub selected: usize,
+    pub scroll: usize,
+    pub selected_index: Option<usize>,
+    pub should_quit: bool,
+}
+
+impl SourcePickerState {
+    pub fn apply(
+        &mut self,
+        action: SourcePickerAction,
+        source_count: usize,
+        viewport_height: usize,
+    ) {
+        match action {
+            SourcePickerAction::MoveDown => {
+                self.selected = self
+                    .selected
+                    .saturating_add(1)
+                    .min(source_count.saturating_sub(1));
+            }
+            SourcePickerAction::MoveUp => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            SourcePickerAction::Select if source_count > 0 => {
+                self.selected_index = Some(self.selected);
+                self.should_quit = true;
+            }
+            SourcePickerAction::Select => {}
+            SourcePickerAction::Quit => self.should_quit = true,
+        }
+
+        if source_count == 0 {
+            self.selected = 0;
+            self.scroll = 0;
+            return;
+        }
+
+        self.selected = self.selected.min(source_count - 1);
+        let height = viewport_height.max(1);
+        if self.selected < self.scroll {
+            self.scroll = self.selected;
+        } else if self.selected >= self.scroll.saturating_add(height) {
+            self.scroll = self.selected + 1 - height;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PickerAction, PickerState};
+    use super::{PickerAction, PickerState, SourcePickerAction, SourcePickerState};
 
     fn topics() -> Vec<String> {
         vec![
@@ -168,5 +225,30 @@ mod tests {
 
         assert!(state.selected_topic.is_none());
         assert!(!state.should_quit);
+    }
+
+    #[test]
+    fn source_selection_moves_clamps_and_returns_an_index() {
+        let mut state = SourcePickerState::default();
+
+        for _ in 0..10 {
+            state.apply(SourcePickerAction::MoveDown, 3, 2);
+        }
+        assert_eq!(state.selected, 2);
+        assert_eq!(state.scroll, 1);
+
+        state.apply(SourcePickerAction::Select, 3, 2);
+        assert_eq!(state.selected_index, Some(2));
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn source_selection_can_cancel_without_choosing() {
+        let mut state = SourcePickerState::default();
+
+        state.apply(SourcePickerAction::Quit, 2, 2);
+
+        assert!(state.selected_index.is_none());
+        assert!(state.should_quit);
     }
 }

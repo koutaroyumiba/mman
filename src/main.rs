@@ -9,7 +9,7 @@ use mman::{
     cli::{Cli, ExecutionMode, TerminalState, select_mode},
     pages::PageIndex,
     paths::{search_paths, validate_roots},
-    tui::{run_picker, run_viewer},
+    tui::{run_picker, run_source_picker, run_viewer},
 };
 
 fn main() -> ExitCode {
@@ -86,6 +86,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         safe_output_text(&content_match.text)
                     )?;
                 }
+            }
+        }
+        ExecutionMode::Select { topic } => {
+            let pages = page_index.lookup_all(&topic)?;
+            let selected = if pages.len() == 1 {
+                Some(0)
+            } else {
+                let sources: Vec<PathBuf> = pages.iter().map(|page| page.path.clone()).collect();
+                run_source_picker(&topic, &sources)?
+            };
+
+            if let Some(page) = selected.and_then(|index| pages.get(index)) {
+                let source = String::from_utf8(page.read_raw()?)?;
+                run_viewer(&page.topic, &source)?;
             }
         }
     }

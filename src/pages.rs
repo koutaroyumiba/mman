@@ -258,24 +258,28 @@ impl PageIndex {
         self.pages.is_empty()
     }
 
-    /// User-facing operation
+    /// User-facing lookup using normal precedence.
     pub fn lookup(&self, topic: &str) -> Result<&Page, LookupError> {
+        Ok(&self.lookup_all(topic)?[0])
+    }
+
+    /// User-facing lookup that retains every discovered copy of a topic.
+    pub fn lookup_all(&self, topic: &str) -> Result<&[Page], LookupError> {
         let normalized_topic = normalize_topic(topic).map_err(LookupError::InvalidTopic)?;
+        let pages = self.resolve_all(&normalized_topic);
 
-        match self.resolve(normalized_topic.as_str()) {
-            Some(page) => Ok(page),
-            None => {
-                let suggestions = self
-                    .suggestions(&normalized_topic, 5)
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect();
-
-                Err(LookupError::NotFound {
-                    topic: normalized_topic,
-                    suggestions,
-                })
-            }
+        if pages.is_empty() {
+            let suggestions = self
+                .suggestions(&normalized_topic, 5)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+            Err(LookupError::NotFound {
+                topic: normalized_topic,
+                suggestions,
+            })
+        } else {
+            Ok(pages)
         }
     }
 }
@@ -576,7 +580,9 @@ mod tests {
         let index = PageIndex::discover(&[first.path().to_path_buf(), second.path().to_path_buf()])
             .expect("page index should be built");
 
-        let copies = index.resolve_all("git");
+        let copies = index
+            .lookup_all("git.md")
+            .expect("all copies should resolve with a normalized topic");
 
         assert_eq!(copies.len(), 2);
         assert_eq!(copies[0].path, first.path().join("git.md"));
