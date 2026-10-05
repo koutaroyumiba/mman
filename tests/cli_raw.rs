@@ -100,4 +100,26 @@ fn raw_reports_missing_topic_on_stderr() {
 
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
     assert!(stderr.contains("no manual page found for missing"));
+    assert!(!stderr.contains("Did you mean?"));
+}
+
+#[test]
+fn missing_topic_reports_similar_topic_suggestions() {
+    let root = tempdir().expect("temporary root should be created");
+    write_page(root.path(), "concepts/ownership", b"# Ownership\n");
+
+    let output = mman_command()
+        .arg("-M")
+        .arg(root.path())
+        .args(["--raw", "owership"])
+        .output()
+        .expect("mman should run");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert!(stderr.contains("no manual page found for owership"));
+    assert!(stderr.contains("Did you mean?"));
+    assert!(stderr.contains("  concepts/ownership"));
 }
