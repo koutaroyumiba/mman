@@ -116,6 +116,22 @@ pub fn parse_markdown(source: &str) -> Document {
                     inline_style.link.clone(),
                 );
             }
+            Event::SoftBreak => {
+                push_span(
+                    &mut current_block,
+                    String::from(" "),
+                    inline_style.text_style(false),
+                    inline_style.link.clone(),
+                );
+            }
+            Event::HardBreak => {
+                push_span(
+                    &mut current_block,
+                    String::from("\n"),
+                    inline_style.text_style(false),
+                    inline_style.link.clone(),
+                );
+            }
             Event::End(TagEnd::Emphasis) => {
                 inline_style.emphasis_depth = inline_style.emphasis_depth.saturating_sub(1);
             }

@@ -87,6 +87,30 @@ fn combines_nested_inline_styles() {
 }
 
 #[test]
+fn converts_soft_line_break_to_space() {
+    let document = parse_markdown("first line\nsecond line\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("first line second line")],
+        }]
+    );
+}
+
+#[test]
+fn preserves_hard_line_break_in_paragraph() {
+    let document = parse_markdown("first line  \nsecond line\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("first line\nsecond line")],
+        }]
+    );
+}
+
+#[test]
 fn sanitizes_terminal_control_characters_in_prose() {
     let document = parse_markdown("safe \u{1b}[31mred\u{7}\n");
 
