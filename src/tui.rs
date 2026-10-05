@@ -7,15 +7,17 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
-    Terminal,
+    Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout as RatatuiLayout},
+    layout::{Constraint, Direction, Layout as RatatuiLayout, Rect},
     style::{Color, Modifier, Style},
     text::{Line as TuiLine, Span as TuiSpan},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
+    app::{Action, ViewBounds, ViewerState},
     layout::{LineKind, RenderedSpan, layout_document},
     markdown::parse_markdown,
 };
@@ -58,107 +60,210 @@ pub fn run_viewer(topic: &str, source: &str) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    let mut scroll = 0usize;
+    let mut state = ViewerState::default();
+    let mut bounds = ViewBounds {
+        line_count: 0,
+        viewport_height: 0,
+        widest_line: 0,
+        viewport_width: 0,
+    };
 
-    loop {
-        let mut maximum_scroll = 0usize;
-        let mut page_step = 1usize;
-
+    while !state.should_quit {
         terminal.draw(|frame| {
-            let regions = RatatuiLayout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(1)])
-                .split(frame.area());
-            let body = regions[0];
-            let status = regions[1];
-            let content_width = body.width.saturating_sub(2) as usize;
-            let viewport_height = body.height.saturating_sub(2) as usize;
-            let layout = layout_document(&document, content_width);
-
-            maximum_scroll = layout.lines.len().saturating_sub(viewport_height);
-            page_step = viewport_height.max(1);
-            scroll = scroll.min(maximum_scroll);
-
-            let visible_lines: Vec<TuiLine<'static>> = layout
-                .lines
-                .iter()
-                .skip(scroll)
-                .take(viewport_height)
-                .map(to_tui_line)
-                .collect();
-
-            let title = format!(" mman · {topic} ");
-            let page = Paragraph::new(visible_lines)
-                .style(Style::default().fg(TEXT).bg(BASE))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(title)
-                        .border_style(Style::default().fg(MUTED))
-                        .style(Style::default().bg(BASE)),
-                );
-            frame.render_widget(page, body);
-
-            let position = if layout.lines.is_empty() {
-                String::from("0/0")
-            } else {
-                format!("{}/{}", scroll + 1, layout.lines.len())
-            };
-            let status_text = format!(" {position}  j/k scroll  q quit ");
-            frame.render_widget(
-                Paragraph::new(status_text).style(Style::default().fg(MUTED).bg(SURFACE)),
-                status,
-            );
+            bounds = render_viewer(frame, topic, &document, &mut state);
         })?;
 
-        if let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            match key {
-                KeyEvent {
-                    code: KeyCode::Char('q') | KeyCode::Esc,
-                    ..
-                } => break,
-                KeyEvent {
-                    code: KeyCode::Char('j') | KeyCode::Down,
-                    ..
-                } => scroll = (scroll + 1).min(maximum_scroll),
-                KeyEvent {
-                    code: KeyCode::Char('k') | KeyCode::Up,
-                    ..
-                } => scroll = scroll.saturating_sub(1),
-                KeyEvent {
-                    code: KeyCode::PageDown,
-                    ..
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if let Some(action) = action_for_key(key, state.show_help) {
+                    state.apply(action, bounds);
                 }
-                | KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                } => scroll = (scroll + page_step).min(maximum_scroll),
-                KeyEvent {
-                    code: KeyCode::PageUp,
-                    ..
-                }
-                | KeyEvent {
-                    code: KeyCode::Char('u'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                } => scroll = scroll.saturating_sub(page_step),
-                KeyEvent {
-                    code: KeyCode::Home | KeyCode::Char('g'),
-                    ..
-                } => scroll = 0,
-                KeyEvent {
-                    code: KeyCode::End | KeyCode::Char('G'),
-                    ..
-                } => scroll = maximum_scroll,
-                _ => {}
             }
+            Event::Resize(_, _) => state.clamp(bounds),
+            _ => {}
         }
     }
 
     Ok(())
+}
+
+fn render_viewer(
+    frame: &mut Frame<'_>,
+    topic: &str,
+    document: &crate::document::Document,
+    state: &mut ViewerState,
+) -> ViewBounds {
+    let regions = RatatuiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(frame.area());
+    let body = regions[0];
+    let status = regions[1];
+    let viewport_width = body.width.saturating_sub(2) as usize;
+    let viewport_height = body.height.saturating_sub(2) as usize;
+    let layout = layout_document(document, viewport_width);
+    let widest_line = layout
+        .lines
+        .iter()
+        .map(|line| UnicodeWidthStr::width(line.plain_text().as_str()))
+        .max()
+        .unwrap_or(0);
+    let bounds = ViewBounds {
+        line_count: layout.lines.len(),
+        viewport_height,
+        widest_line,
+        viewport_width,
+    };
+    state.clamp(bounds);
+
+    let rendered_lines: Vec<TuiLine<'static>> = layout.lines.iter().map(to_tui_line).collect();
+    let title = format!(" mman · {topic} ");
+    let page = Paragraph::new(rendered_lines)
+        .style(Style::default().fg(TEXT).bg(BASE))
+        .scroll((
+            state.vertical_scroll.min(u16::MAX as usize) as u16,
+            state.horizontal_scroll.min(u16::MAX as usize) as u16,
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(MUTED))
+                .style(Style::default().bg(BASE)),
+        );
+    frame.render_widget(page, body);
+
+    let position = if layout.lines.is_empty() {
+        String::from("0/0")
+    } else {
+        format!("{}/{}", state.vertical_scroll + 1, layout.lines.len())
+    };
+    let status_text = format!(
+        " {position}  x:{}  j/k scroll  h/l pan  ? help  q quit ",
+        state.horizontal_scroll
+    );
+    frame.render_widget(
+        Paragraph::new(status_text).style(Style::default().fg(MUTED).bg(SURFACE)),
+        status,
+    );
+
+    if state.show_help {
+        render_help(frame);
+    }
+
+    bounds
+}
+
+fn action_for_key(key: KeyEvent, help_visible: bool) -> Option<Action> {
+    if help_visible {
+        return match key.code {
+            KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => Some(Action::ToggleHelp),
+            _ => None,
+        };
+    }
+
+    match key {
+        KeyEvent {
+            code: KeyCode::Char('q') | KeyCode::Esc,
+            ..
+        } => Some(Action::Quit),
+        KeyEvent {
+            code: KeyCode::Char('?'),
+            ..
+        } => Some(Action::ToggleHelp),
+        KeyEvent {
+            code: KeyCode::Char('j') | KeyCode::Down,
+            ..
+        } => Some(Action::ScrollDown),
+        KeyEvent {
+            code: KeyCode::Char('k') | KeyCode::Up,
+            ..
+        } => Some(Action::ScrollUp),
+        KeyEvent {
+            code: KeyCode::Char('h') | KeyCode::Left,
+            ..
+        } => Some(Action::ScrollLeft),
+        KeyEvent {
+            code: KeyCode::Char('l') | KeyCode::Right,
+            ..
+        } => Some(Action::ScrollRight),
+        KeyEvent {
+            code: KeyCode::PageDown,
+            ..
+        }
+        | KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        } => Some(Action::PageDown),
+        KeyEvent {
+            code: KeyCode::PageUp,
+            ..
+        }
+        | KeyEvent {
+            code: KeyCode::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        } => Some(Action::PageUp),
+        KeyEvent {
+            code: KeyCode::Home | KeyCode::Char('g'),
+            ..
+        } => Some(Action::GoToTop),
+        KeyEvent {
+            code: KeyCode::End | KeyCode::Char('G'),
+            ..
+        } => Some(Action::GoToBottom),
+        _ => None,
+    }
+}
+
+fn render_help(frame: &mut Frame<'_>) {
+    let area = centered_rect(frame.area(), 64, 72);
+    frame.render_widget(Clear, area);
+
+    let help = vec![
+        TuiLine::from("Navigation").style(Style::default().fg(IRIS).bold()),
+        TuiLine::from(""),
+        TuiLine::from("  j / Down          Scroll down"),
+        TuiLine::from("  k / Up            Scroll up"),
+        TuiLine::from("  Ctrl-d / PageDown Move down one page"),
+        TuiLine::from("  Ctrl-u / PageUp   Move up one page"),
+        TuiLine::from("  h / Left          Pan left"),
+        TuiLine::from("  l / Right         Pan right"),
+        TuiLine::from("  g / Home          Go to beginning"),
+        TuiLine::from("  G / End           Go to end"),
+        TuiLine::from("  ?                 Close help"),
+        TuiLine::from("  q / Esc           Close help"),
+    ];
+    let popup = Paragraph::new(help)
+        .style(Style::default().fg(TEXT).bg(OVERLAY))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Help ")
+                .border_style(Style::default().fg(IRIS))
+                .style(Style::default().bg(OVERLAY)),
+        );
+    frame.render_widget(popup, area);
+}
+
+fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = RatatuiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    RatatuiLayout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn to_tui_line(line: &crate::layout::Line) -> TuiLine<'static> {
@@ -213,4 +318,62 @@ fn span_style(span: &RenderedSpan, kind: LineKind) -> Style {
     }
 
     style
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::{ViewerState, render_viewer};
+    use crate::markdown::parse_markdown;
+
+    #[test]
+    fn test_backend_renders_topic_and_document() {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+        let document = parse_markdown("# NAME\n\nbody text\n");
+        let mut state = ViewerState::default();
+
+        terminal
+            .draw(|frame| {
+                render_viewer(frame, "example", &document, &mut state);
+            })
+            .expect("viewer should render");
+
+        let contents: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(contents.contains("mman · example"));
+        assert!(contents.contains("body text"));
+    }
+
+    #[test]
+    fn test_backend_renders_help_overlay_on_tiny_terminal() {
+        let backend = TestBackend::new(24, 8);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+        let document = parse_markdown("text\n");
+        let mut state = ViewerState {
+            show_help: true,
+            ..ViewerState::default()
+        };
+
+        terminal
+            .draw(|frame| {
+                render_viewer(frame, "example", &document, &mut state);
+            })
+            .expect("help should render on a tiny terminal");
+
+        let contents: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(contents.contains("Help"));
+    }
 }

@@ -152,8 +152,11 @@ j / Down          Scroll down
 k / Up            Scroll up
 Ctrl-d / PageDown Move down by one page
 Ctrl-u / PageUp   Move up by one page
+h / Left          Pan horizontally left
+l / Right         Pan horizontally right
 g / Home          Go to the beginning
 G / End           Go to the end
+?                 Toggle keybinding help
 q / Esc           Quit
 ```
 
@@ -234,7 +237,8 @@ cargo clippy --all-targets -- -D warnings
 
 The implementation currently includes focused tests for CLI parsing, execution
 mode selection, path handling, topic validation, page discovery, precedence,
-duplicate retention, raw loading, typo suggestions, and command-line output.
+duplicate retention, raw loading, typo suggestions, viewer state transitions,
+terminal-buffer rendering, and command-line output.
 
 ## Not implemented yet
 
@@ -246,5 +250,5 @@ The following documented goals are still planned:
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
 - Internal links and navigation history
-- Search, help, horizontal scrolling, and other full viewer controls
+- Additional viewer controls such as search and link focus
 - Panic-hook and interruption hardening for terminal restoration
