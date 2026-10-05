@@ -1,3 +1,5 @@
+use std::io;
+use std::io::Write;
 use std::process::ExitCode;
 use std::{env, error::Error, path::PathBuf};
 
@@ -31,12 +33,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
 
     let page_index = PageIndex::discover(&validated_paths.roots)?;
-    if cli.where_path {
-        let Some(topic) = cli.topic else {
-            return Err("topic required for --where".into());
+    if cli.where_path || cli.raw {
+        let Some(topic) = cli.topic.as_deref() else {
+            if cli.where_path {
+                return Err("topic required for --where".into());
+            }
+            return Err("topic required for --raw".into());
         };
-        let page = page_index.lookup(topic.as_str())?;
-        println!("{}", page.path.display());
+        let page = page_index.lookup(topic)?;
+
+        if cli.where_path {
+            println!("{}", page.path.display());
+        } else {
+            let raw_content = page.read_raw()?;
+            let mut stdout = io::stdout().lock();
+            stdout.write_all(&raw_content)?;
+        }
     }
 
     Ok(())
