@@ -126,6 +126,18 @@ impl fmt::Display for LookupError {
 
 impl Error for LookupError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentMatch {
+    pub line_number: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionMatch {
+    pub topic: String,
+    pub content_matches: Vec<ContentMatch>,
+}
+
 /// Searchable collection of all discovered pages
 #[derive(Debug, Default)]
 pub struct PageIndex {
@@ -201,6 +213,44 @@ impl PageIndex {
         );
         matches.truncate(limit);
         matches.into_iter().map(|(_, topic)| topic).collect()
+    }
+
+    /// Searches the highest-precedence copy of each topic.
+    pub fn search(&self, term: &str) -> io::Result<Vec<CollectionMatch>> {
+        let lowercase_term = term.to_lowercase();
+        let mut results = Vec::new();
+
+        for pages in self.pages.values() {
+            let Some(page) = pages.first() else {
+                continue;
+            };
+            let bytes = page.read_raw()?;
+            let source = String::from_utf8(bytes).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("page {} is not valid UTF-8: {error}", page.path.display()),
+                )
+            })?;
+            let content_matches: Vec<ContentMatch> = source
+                .lines()
+                .enumerate()
+                .filter(|(_, line)| line.to_lowercase().contains(&lowercase_term))
+                .take(3)
+                .map(|(index, line)| ContentMatch {
+                    line_number: index + 1,
+                    text: line.to_owned(),
+                })
+                .collect();
+
+            if page.topic.to_lowercase().contains(&lowercase_term) || !content_matches.is_empty() {
+                results.push(CollectionMatch {
+                    topic: page.topic.clone(),
+                    content_matches,
+                });
+            }
+        }
+
+        Ok(results)
     }
 
     /// Checks if the index contains any topics

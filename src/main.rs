@@ -71,10 +71,36 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         ExecutionMode::List => {
             let mut stdout = io::stdout().lock();
             for topic in page_index.topics() {
-                writeln!(stdout, "{topic}")?;
+                writeln!(stdout, "{}", safe_output_text(topic))?;
+            }
+        }
+        ExecutionMode::Search { term } => {
+            let mut stdout = io::stdout().lock();
+            for result in page_index.search(&term)? {
+                writeln!(stdout, "{}", safe_output_text(&result.topic))?;
+                for content_match in result.content_matches {
+                    writeln!(
+                        stdout,
+                        "  {}: {}",
+                        content_match.line_number,
+                        safe_output_text(&content_match.text)
+                    )?;
+                }
             }
         }
     }
 
     Ok(())
+}
+
+fn safe_output_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect()
 }

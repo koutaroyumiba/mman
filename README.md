@@ -36,6 +36,8 @@ interactive topic picker, and an interactive Markdown viewer.
   case-insensitive in-page search with highlighted matches.
 - Built-in topic picker with case-insensitive literal filtering.
 - Stable alphabetical topic listing with `-l` or `--list`.
+- Collection search across topic names and highest-precedence page content with
+  `-k` or `--search`.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
 - Flush-left headings with indented body content for stronger visual hierarchy.
@@ -115,12 +117,13 @@ Arguments:
   [TOPIC]  Topic to open
 
 Options:
-  -M <PATHS>     Override MMANPATH for this invocation
-      --raw      Print the original Markdown
-      --where    Print the selected page's source path
-  -l, --list     List available topics
-  -h, --help     Print help
-  -V, --version  Print version
+  -M <PATHS>           Override MMANPATH for this invocation
+      --raw            Print the original Markdown
+      --where          Print the selected page's source path
+  -l, --list           List available topics
+  -k, --search <TERM>  Search topic names and page content
+  -h, --help           Print help
+  -V, --version        Print version
 ```
 
 ### Pick a topic interactively
@@ -142,6 +145,18 @@ mman -l
 
 Listing prints each unique topic once in alphabetical order, including nested
 topics such as `concepts/ownership`.
+
+### Search the page collection
+
+```sh
+mman -k branch
+mman -k "working tree"
+```
+
+Search uses case-insensitive literal matching over topic names and raw Markdown
+content. Results are ordered by topic and include up to three matching source
+lines with one-based line numbers. Only the highest-precedence copy of each
+topic is searched.
 
 ### Print original Markdown
 
@@ -246,8 +261,8 @@ interpret embedded HTML, fetch remote resources, or invoke external renderers.
 
 ## Exit behavior
 
-- Page content, topic listings, and `--where` results are written to standard
-  output.
+- Page content, topic listings, collection-search results, and `--where`
+  results are written to standard output.
 - Warnings and errors are written to standard error.
 - Successful commands return status `0`.
 - Invalid usage, configuration failures, and missing topics return a non-zero
@@ -272,7 +287,6 @@ terminal-buffer rendering, and command-line output.
 
 The following documented goals are still planned:
 
-- Collection search with `-k`
 - Interactive duplicate selection with `--select`
 - Internal links and navigation history
 - Additional viewer controls such as search and link focus

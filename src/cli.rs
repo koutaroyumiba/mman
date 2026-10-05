@@ -22,9 +22,19 @@ pub struct Cli {
     #[arg(
         short = 'l',
         long = "list",
-        conflicts_with_all = ["raw", "where_path", "topic"]
+        conflicts_with_all = ["raw", "where_path", "search", "topic"]
     )]
     pub list: bool,
+
+    /// Search topic names and page content
+    #[arg(
+        short = 'k',
+        long = "search",
+        value_name = "TERM",
+        conflicts_with_all = ["raw", "where_path", "list", "topic"],
+        value_parser = clap::builder::NonEmptyStringValueParser::new()
+    )]
+    pub search: Option<String>,
 
     /// Topic to open.
     #[arg(value_name = "TOPIC")]
@@ -50,6 +60,7 @@ pub enum ExecutionMode {
     Raw { topic: String },
     Where { topic: String },
     List,
+    Search { term: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +86,10 @@ pub fn select_mode(
 ) -> Result<ExecutionMode, ModeSelectionError> {
     if cli.list {
         return Ok(ExecutionMode::List);
+    }
+
+    if let Some(term) = cli.search.as_ref() {
+        return Ok(ExecutionMode::Search { term: term.clone() });
     }
 
     let Some(topic) = cli.topic.as_ref() else {
@@ -116,6 +131,7 @@ mod tests {
         assert!(!cli.raw);
         assert!(!cli.where_path);
         assert!(!cli.list);
+        assert!(cli.search.is_none());
     }
 
     #[test]
@@ -165,6 +181,39 @@ mod tests {
             vec!["mman", "-l", "ownership"],
             vec!["mman", "-l", "--raw"],
             vec!["mman", "-l", "--where"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_collection_search_without_a_topic() {
+        let cli =
+            Cli::try_parse_from(["mman", "-k", "working tree"]).expect("arguments should parse");
+
+        assert_eq!(cli.search.as_deref(), Some("working tree"));
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: false,
+                    stdout: false,
+                }
+            ),
+            Ok(ExecutionMode::Search {
+                term: String::from("working tree")
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_conflicting_collection_search() {
+        for arguments in [
+            vec!["mman", "-k", ""],
+            vec!["mman", "-k", "term", "ownership"],
+            vec!["mman", "-k", "term", "--raw"],
+            vec!["mman", "-k", "term", "--where"],
+            vec!["mman", "-k", "term", "-l"],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err());
         }
