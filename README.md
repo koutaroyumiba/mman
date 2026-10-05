@@ -136,7 +136,7 @@ mman
 ```
 
 Type to filter topic names, use the arrow keys or `j`/`k` to move, press `Enter`
-to open the selected topic, and press `Esc` or `q` to quit.
+to open the selected topic, and press `Esc`, `q`, or `Ctrl-C` to quit.
 
 ### Select a duplicate source
 
@@ -145,8 +145,8 @@ mman --select concepts/ownership
 ```
 
 When a topic exists in multiple roots, the source picker displays each full
-path. A topic with only one source opens directly. Source selection requires an
-interactive terminal.
+path. A topic with only one source opens directly. Press `Esc`, `q`, or `Ctrl-C`
+to cancel. Source selection requires an interactive terminal.
 
 ### List available topics
 
@@ -211,10 +211,12 @@ N                 Go to the previous match
 Esc               Clear the active search; quit when no search is active
 ?                 Toggle keybinding help
 q                 Quit
+Ctrl-C            Quit
 ```
 
-The initial viewer reflows content when the terminal is resized and restores
-raw mode and the alternate screen on controlled exit.
+The viewer reflows content when the terminal is resized. An RAII terminal guard
+and panic hook restore raw mode, cursor visibility, and the alternate screen on
+normal exits, controlled errors, interruption, and unwinding.
 
 ### Print the selected source path
 
@@ -300,4 +302,3 @@ The following documented goals are still planned:
 
 - Internal links and navigation history
 - Additional viewer controls such as search and link focus
-- Panic-hook and interruption hardening for terminal restoration

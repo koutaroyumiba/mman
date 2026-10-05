@@ -1,4 +1,11 @@
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{
+        Once,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -34,24 +41,109 @@ const PINE: Color = Color::Rgb(49, 116, 143);
 const FOAM: Color = Color::Rgb(156, 207, 216);
 const IRIS: Color = Color::Rgb(196, 167, 231);
 
-struct TerminalGuard;
+const TERMINAL_INACTIVE: u8 = 0;
+const TERMINAL_RAW: u8 = 1;
+const TERMINAL_ALTERNATE: u8 = 2;
+static TERMINAL_STATE: AtomicU8 = AtomicU8::new(TERMINAL_INACTIVE);
+static INSTALL_PANIC_HOOK: Once = Once::new();
 
-impl TerminalGuard {
-    fn enter() -> io::Result<Self> {
-        enable_raw_mode()?;
+trait TerminalControl {
+    fn enable_raw(&mut self) -> io::Result<()>;
+    fn enter_alternate(&mut self) -> io::Result<()>;
+    fn leave_alternate(&mut self) -> io::Result<()>;
+    fn disable_raw(&mut self) -> io::Result<()>;
+}
 
-        if let Err(error) = execute!(io::stdout(), EnterAlternateScreen, Hide) {
-            let _ = disable_raw_mode();
-            return Err(error);
-        }
+struct CrosstermControl;
 
-        Ok(Self)
+impl TerminalControl for CrosstermControl {
+    fn enable_raw(&mut self) -> io::Result<()> {
+        enable_raw_mode()
+    }
+
+    fn enter_alternate(&mut self) -> io::Result<()> {
+        execute!(io::stdout(), EnterAlternateScreen, Hide)
+    }
+
+    fn leave_alternate(&mut self) -> io::Result<()> {
+        execute!(io::stdout(), Show, LeaveAlternateScreen)
+    }
+
+    fn disable_raw(&mut self) -> io::Result<()> {
+        disable_raw_mode()
     }
 }
 
-impl Drop for TerminalGuard {
+struct TerminalGuard<C: TerminalControl> {
+    control: C,
+    raw_enabled: bool,
+    alternate_entered: bool,
+}
+
+impl TerminalGuard<CrosstermControl> {
+    fn enter() -> io::Result<Self> {
+        Self::enter_with(CrosstermControl)
+    }
+}
+
+impl<C: TerminalControl> TerminalGuard<C> {
+    fn enter_with(control: C) -> io::Result<Self> {
+        let mut guard = Self {
+            control,
+            raw_enabled: false,
+            alternate_entered: false,
+        };
+
+        guard.control.enable_raw()?;
+        guard.raw_enabled = true;
+        TERMINAL_STATE.store(TERMINAL_RAW, Ordering::SeqCst);
+        // Arm alternate-screen cleanup before entering because a terminal write can
+        // partially succeed before reporting an error.
+        guard.alternate_entered = true;
+        TERMINAL_STATE.store(TERMINAL_ALTERNATE, Ordering::SeqCst);
+        guard.control.enter_alternate()?;
+
+        Ok(guard)
+    }
+
+    fn restore(&mut self) {
+        if TERMINAL_STATE.swap(TERMINAL_INACTIVE, Ordering::SeqCst) == TERMINAL_INACTIVE {
+            return;
+        }
+
+        if self.alternate_entered {
+            let _ = self.control.leave_alternate();
+            self.alternate_entered = false;
+        }
+        if self.raw_enabled {
+            let _ = self.control.disable_raw();
+            self.raw_enabled = false;
+        }
+    }
+}
+
+impl<C: TerminalControl> Drop for TerminalGuard<C> {
     fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+pub fn install_panic_hook() {
+    INSTALL_PANIC_HOOK.call_once(|| {
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            restore_terminal_after_panic();
+            previous_hook(panic_info);
+        }));
+    });
+}
+
+fn restore_terminal_after_panic() {
+    let state = TERMINAL_STATE.swap(TERMINAL_INACTIVE, Ordering::SeqCst);
+    if state >= TERMINAL_ALTERNATE {
         let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
+    }
+    if state >= TERMINAL_RAW {
         let _ = disable_raw_mode();
     }
 }
@@ -210,7 +302,7 @@ fn render_picker(
         .collect::<Vec<_>>()
         .join(" · ");
     let status = format!(
-        " {}/{} topics  ↑/↓ or j/k move  Enter open  Esc/q quit  roots: {roots} ",
+        " {}/{} topics  ↑/↓ or j/k move  Enter open  Esc/q/Ctrl-C quit  roots: {roots} ",
         state.filtered.len(),
         topics.len()
     );
@@ -271,7 +363,7 @@ fn render_source_picker(
     frame.render_widget(list, regions[0]);
 
     let status = format!(
-        " {} sources  ↑/↓ or j/k move  Enter open  Esc/q cancel ",
+        " {} sources  ↑/↓ or j/k move  Enter open  Esc/q/Ctrl-C cancel ",
         sources.len()
     );
     frame.render_widget(
@@ -283,6 +375,10 @@ fn render_source_picker(
 }
 
 fn source_picker_action_for_key(key: KeyEvent) -> Option<SourcePickerAction> {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(SourcePickerAction::Quit);
+    }
+
     match key {
         KeyEvent {
             code: KeyCode::Esc | KeyCode::Char('q'),
@@ -305,6 +401,10 @@ fn source_picker_action_for_key(key: KeyEvent) -> Option<SourcePickerAction> {
 }
 
 fn picker_action_for_key(key: KeyEvent) -> Option<PickerAction> {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(PickerAction::Quit);
+    }
+
     match key {
         KeyEvent {
             code: KeyCode::Esc | KeyCode::Char('q'),
@@ -433,6 +533,10 @@ fn render_viewer(
 }
 
 fn action_for_key(key: KeyEvent, state: &ViewerState) -> Option<Action> {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Action::Quit);
+    }
+
     if state.show_help {
         return match key.code {
             KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => Some(Action::ToggleHelp),
@@ -555,6 +659,7 @@ fn render_help(frame: &mut Frame<'_>) {
         TuiLine::from("  Esc               Clear active search"),
         TuiLine::from("  ?                 Close help"),
         TuiLine::from("  q                 Close help"),
+        TuiLine::from("  Ctrl-C            Quit"),
     ];
     let popup = Paragraph::new(help)
         .style(Style::default().fg(TEXT).bg(OVERLAY))
@@ -663,17 +768,174 @@ fn span_style(span: &RenderedSpan, kind: LineKind) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        cell::RefCell,
+        io,
+        panic::{AssertUnwindSafe, catch_unwind},
+        path::PathBuf,
+        rc::Rc,
+        sync::Mutex,
+    };
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::{
         Action, PickerAction, PickerState, ROSE, SourcePickerAction, SourcePickerState,
-        ViewerState, action_for_key, picker_action_for_key, render_picker, render_source_picker,
-        render_viewer, source_picker_action_for_key,
+        TERMINAL_INACTIVE, TERMINAL_STATE, TerminalControl, TerminalGuard, ViewerState,
+        action_for_key, picker_action_for_key, render_picker, render_source_picker, render_viewer,
+        source_picker_action_for_key,
     };
     use crate::{app::ViewBounds, markdown::parse_markdown};
+
+    static TERMINAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Clone)]
+    struct FakeTerminalControl {
+        events: Rc<RefCell<Vec<&'static str>>>,
+        fail_enter_alternate: bool,
+        fail_leave_alternate: bool,
+    }
+
+    impl FakeTerminalControl {
+        fn new(events: Rc<RefCell<Vec<&'static str>>>) -> Self {
+            Self {
+                events,
+                fail_enter_alternate: false,
+                fail_leave_alternate: false,
+            }
+        }
+    }
+
+    impl TerminalControl for FakeTerminalControl {
+        fn enable_raw(&mut self) -> io::Result<()> {
+            self.events.borrow_mut().push("enable_raw");
+            Ok(())
+        }
+
+        fn enter_alternate(&mut self) -> io::Result<()> {
+            self.events.borrow_mut().push("enter_alternate");
+            if self.fail_enter_alternate {
+                Err(io::Error::other("enter failed"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn leave_alternate(&mut self) -> io::Result<()> {
+            self.events.borrow_mut().push("leave_alternate");
+            if self.fail_leave_alternate {
+                Err(io::Error::other("leave failed"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn disable_raw(&mut self) -> io::Result<()> {
+            self.events.borrow_mut().push("disable_raw");
+            Ok(())
+        }
+    }
+
+    fn reset_terminal_state() {
+        TERMINAL_STATE.store(TERMINAL_INACTIVE, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn terminal_guard_restores_after_normal_completion() {
+        let _lock = TERMINAL_TEST_LOCK.lock().expect("terminal test lock");
+        reset_terminal_state();
+        let events = Rc::new(RefCell::new(Vec::new()));
+
+        {
+            let _guard = TerminalGuard::enter_with(FakeTerminalControl::new(events.clone()))
+                .expect("terminal should initialize");
+        }
+
+        assert_eq!(
+            *events.borrow(),
+            [
+                "enable_raw",
+                "enter_alternate",
+                "leave_alternate",
+                "disable_raw"
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_guard_restores_all_state_when_alternate_screen_entry_fails() {
+        let _lock = TERMINAL_TEST_LOCK.lock().expect("terminal test lock");
+        reset_terminal_state();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = FakeTerminalControl::new(events.clone());
+        control.fail_enter_alternate = true;
+
+        let result = TerminalGuard::enter_with(control);
+
+        assert!(result.is_err());
+        assert_eq!(
+            *events.borrow(),
+            [
+                "enable_raw",
+                "enter_alternate",
+                "leave_alternate",
+                "disable_raw"
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_guard_restores_after_session_error_and_attempts_all_cleanup() {
+        let _lock = TERMINAL_TEST_LOCK.lock().expect("terminal test lock");
+        reset_terminal_state();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = FakeTerminalControl::new(events.clone());
+        control.fail_leave_alternate = true;
+
+        let result = (|| -> io::Result<()> {
+            let _guard = TerminalGuard::enter_with(control)?;
+            Err(io::Error::other("event read failed"))
+        })();
+
+        assert!(result.is_err());
+        assert_eq!(
+            *events.borrow(),
+            [
+                "enable_raw",
+                "enter_alternate",
+                "leave_alternate",
+                "disable_raw"
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_guard_restores_while_unwinding() {
+        let _lock = TERMINAL_TEST_LOCK.lock().expect("terminal test lock");
+        reset_terminal_state();
+        let events = Rc::new(RefCell::new(Vec::new()));
+
+        let result = catch_unwind(AssertUnwindSafe({
+            let events = events.clone();
+            move || {
+                let _guard = TerminalGuard::enter_with(FakeTerminalControl::new(events))
+                    .expect("terminal should initialize");
+                panic!("test panic");
+            }
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(
+            *events.borrow(),
+            [
+                "enable_raw",
+                "enter_alternate",
+                "leave_alternate",
+                "disable_raw"
+            ]
+        );
+    }
 
     #[test]
     fn test_backend_renders_picker_results_and_root_context() {
@@ -723,6 +985,10 @@ mod tests {
             picker_action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             Some(PickerAction::Quit)
         );
+        assert_eq!(
+            picker_action_for_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(PickerAction::Quit)
+        );
     }
 
     #[test]
@@ -765,6 +1031,10 @@ mod tests {
         );
         assert_eq!(
             source_picker_action_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(SourcePickerAction::Quit)
+        );
+        assert_eq!(
+            source_picker_action_for_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(SourcePickerAction::Quit)
         );
     }
@@ -822,6 +1092,31 @@ mod tests {
         let contents: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
         assert!(contents.contains("/needle  1/2"));
         assert!(buffer.content.iter().any(|cell| cell.bg == ROSE));
+    }
+
+    #[test]
+    fn control_c_quits_even_from_viewer_modes() {
+        let states = [
+            ViewerState::default(),
+            ViewerState {
+                mode: crate::app::ViewerMode::SearchInput,
+                ..ViewerState::default()
+            },
+            ViewerState {
+                show_help: true,
+                ..ViewerState::default()
+            },
+        ];
+
+        for state in states {
+            assert_eq!(
+                action_for_key(
+                    KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                    &state
+                ),
+                Some(Action::Quit)
+            );
+        }
     }
 
     #[test]

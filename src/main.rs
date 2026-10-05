@@ -9,10 +9,11 @@ use mman::{
     cli::{Cli, ExecutionMode, TerminalState, select_mode},
     pages::PageIndex,
     paths::{search_paths, validate_roots},
-    tui::{run_picker, run_source_picker, run_viewer},
+    tui::{install_panic_hook, run_picker, run_source_picker, run_viewer},
 };
 
 fn main() -> ExitCode {
+    install_panic_hook();
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
