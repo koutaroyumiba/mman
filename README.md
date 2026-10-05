@@ -210,13 +210,6 @@ The implementation currently includes focused tests for CLI parsing, execution
 mode selection, path handling, topic validation, page discovery, precedence,
 duplicate retention, raw loading, typo suggestions, and command-line output.
 
-See the project documents for the broader design and planned work:
-
-- [`PLAN.md`](PLAN.md) — architecture, behavior, and implementation phases
-- [`TEST.md`](TEST.md) — testing conventions
-- [`REVIEW.md`](REVIEW.md) — review and safety checklist
-- [`PAGES.md`](PAGES.md) — manual-page authoring and publishing conventions
-
 ## Not implemented yet
 
 The following documented goals are still planned:
@@ -231,5 +224,3 @@ The following documented goals are still planned:
 - Markdown terminal rendering
 - Internal links and navigation history
 - Terminal lifecycle and restoration handling
-
-See [`PLAN.md`](PLAN.md) for the intended behavior and implementation order.
