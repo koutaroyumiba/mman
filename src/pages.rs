@@ -98,14 +98,28 @@ enum PageKind {
 #[derive(Debug)]
 pub enum LookupError {
     InvalidTopic(TopicError),
-    NotFound(String),
+    NotFound {
+        topic: String,
+        suggestions: Vec<String>,
+    },
 }
 
 impl fmt::Display for LookupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LookupError::InvalidTopic(error) => write!(formatter, "invalid topic: {error}"),
-            LookupError::NotFound(topic) => write!(formatter, "no manual page found for {topic}"),
+            LookupError::NotFound { topic, suggestions } => {
+                write!(formatter, "no manual page found for {topic}")?;
+
+                if !suggestions.is_empty() {
+                    formatter.write_str("\n\nDid you mean?")?;
+                    for suggestion in suggestions {
+                        write!(formatter, "\n  {suggestion}")?;
+                    }
+                }
+
+                Ok(())
+            }
         }
     }
 }
@@ -200,7 +214,18 @@ impl PageIndex {
 
         match self.resolve(normalized_topic.as_str()) {
             Some(page) => Ok(page),
-            None => Err(LookupError::NotFound(normalized_topic)),
+            None => {
+                let suggestions = self
+                    .suggestions(&normalized_topic, 5)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+
+                Err(LookupError::NotFound {
+                    topic: normalized_topic,
+                    suggestions,
+                })
+            }
         }
     }
 }
@@ -595,7 +620,8 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(LookupError::NotFound(topic)) if topic == "missing"
+            Err(LookupError::NotFound { topic, suggestions })
+                if topic == "missing" && suggestions.is_empty()
         ));
     }
 
@@ -612,7 +638,7 @@ mod tests {
         assert!(index.lookup("Ownership").is_ok());
         assert!(matches!(
             index.lookup("ownership"),
-            Err(LookupError::NotFound(topic)) if topic == "ownership"
+            Err(LookupError::NotFound { topic, .. }) if topic == "ownership"
         ));
     }
 

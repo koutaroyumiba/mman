@@ -39,8 +39,7 @@ yet.
 - Validation against absolute topics, hidden components, `.` and `..` traversal,
   repeated separators, and control characters.
 - Invalid-root warnings while valid roots continue to work.
-- Deterministic, case-insensitive typo suggestions in the library layer. These
-  are not yet displayed by the CLI.
+- Deterministic, case-insensitive typo suggestions for missing topics.
 
 ## Installation
 
@@ -220,7 +219,6 @@ The following documented goals are still planned:
 - Topic listing with `-l`
 - Collection search with `-k`
 - Interactive duplicate selection with `--select`
-- CLI display of missing-topic suggestions
 - Markdown terminal rendering
 - Internal links and navigation history
 - Terminal lifecycle and restoration handling
