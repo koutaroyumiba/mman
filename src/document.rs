@@ -5,8 +5,18 @@ pub struct Document {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
-    Heading { level: u8, spans: Vec<Span> },
-    Paragraph { spans: Vec<Span> },
+    Heading {
+        level: u8,
+        spans: Vec<Span>,
+    },
+    Paragraph {
+        spans: Vec<Span>,
+    },
+    CodeBlock {
+        language: Option<String>,
+        text: String,
+    },
+    ThematicBreak,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -75,6 +75,50 @@ fn combines_nested_inline_styles() {
 }
 
 #[test]
+fn parses_fenced_code_block_and_preserves_whitespace() {
+    let document = parse_markdown("```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::CodeBlock {
+            language: Some(String::from("rust")),
+            text: String::from("fn main() {\n    println!(\"hi\");\n}\n"),
+        }]
+    );
+}
+
+#[test]
+fn parses_indented_code_block_without_language() {
+    let document = parse_markdown("    first line\n    second line\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::CodeBlock {
+            language: None,
+            text: String::from("first line\nsecond line\n"),
+        }]
+    );
+}
+
+#[test]
+fn parses_thematic_break() {
+    let document = parse_markdown("before\n\n---\n\nafter\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![
+            Block::Paragraph {
+                spans: vec![plain("before")],
+            },
+            Block::ThematicBreak,
+            Block::Paragraph {
+                spans: vec![plain("after")],
+            },
+        ]
+    );
+}
+
+#[test]
 fn parsed_document_outlives_source_markdown() {
     let document = {
         let source = String::from("## Borrowing\n\nA borrow refers to a value.\n");
