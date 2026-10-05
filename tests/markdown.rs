@@ -182,6 +182,42 @@ fn link_preserves_nested_text_style() {
 }
 
 #[test]
+fn omits_inline_html_tags_but_keeps_readable_text() {
+    let document = parse_markdown("before <b>bold</b> after\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("before bold after")],
+        }]
+    );
+}
+
+#[test]
+fn omits_raw_html_blocks() {
+    let document = parse_markdown("<script>danger()</script>\n\nvisible\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("visible")],
+        }]
+    );
+}
+
+#[test]
+fn renders_image_alt_text_without_fetching_the_image() {
+    let document = parse_markdown("See ![Ferris](https://example.com/ferris.png).\n");
+
+    assert_eq!(
+        document.blocks,
+        vec![Block::Paragraph {
+            spans: vec![plain("See Ferris.")],
+        }]
+    );
+}
+
+#[test]
 fn parses_block_quote_with_nested_blocks() {
     let document = parse_markdown("> **Borrowing** avoids moving a value.\n");
 
