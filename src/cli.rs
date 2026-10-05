@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::{error::Error, ffi::OsString, fmt};
 
 use clap::Parser;
 
@@ -23,9 +23,75 @@ pub struct Cli {
     pub topic: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalState {
+    pub stdin: bool,
+    pub stdout: bool,
+}
+
+impl TerminalState {
+    fn is_interactive(self) -> bool {
+        self.stdin && self.stdout
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Picker,
+    Viewer { topic: String },
+    Raw { topic: String },
+    Where { topic: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeSelectionError {
+    TopicRequiredNonInteractive,
+}
+
+impl fmt::Display for ModeSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TopicRequiredNonInteractive => {
+                formatter.write_str("topic is required in a non-interactive session")
+            }
+        }
+    }
+}
+
+impl Error for ModeSelectionError {}
+
+pub fn select_mode(
+    cli: &Cli,
+    terminals: TerminalState,
+) -> Result<ExecutionMode, ModeSelectionError> {
+    let Some(topic) = cli.topic.as_ref() else {
+        return if terminals.is_interactive() && !cli.raw && !cli.where_path {
+            Ok(ExecutionMode::Picker)
+        } else {
+            Err(ModeSelectionError::TopicRequiredNonInteractive)
+        };
+    };
+
+    if cli.where_path {
+        return Ok(ExecutionMode::Where {
+            topic: topic.clone(),
+        });
+    }
+
+    if cli.raw || !terminals.is_interactive() {
+        return Ok(ExecutionMode::Raw {
+            topic: topic.clone(),
+        });
+    }
+
+    Ok(ExecutionMode::Viewer {
+        topic: topic.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, ExecutionMode, ModeSelectionError, TerminalState, select_mode};
     use clap::Parser;
 
     #[test]
@@ -59,5 +125,111 @@ mod tests {
         let result = Cli::try_parse_from(["mman", "--raw", "--where", "concepts/ownership"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn interactive_no_topic_selects_picker() {
+        let cli = Cli::try_parse_from(["mman"]).expect("arguments should parse");
+        let terminals = TerminalState {
+            stdin: true,
+            stdout: true,
+        };
+
+        assert_eq!(select_mode(&cli, terminals), Ok(ExecutionMode::Picker));
+    }
+
+    #[test]
+    fn noninteractive_no_topic_is_a_usage_error() {
+        let cli = Cli::try_parse_from(["mman"]).expect("arguments should parse");
+
+        for terminals in [
+            TerminalState {
+                stdin: false,
+                stdout: true,
+            },
+            TerminalState {
+                stdin: true,
+                stdout: false,
+            },
+        ] {
+            assert_eq!(
+                select_mode(&cli, terminals),
+                Err(ModeSelectionError::TopicRequiredNonInteractive)
+            );
+        }
+    }
+
+    #[test]
+    fn plain_topic_selects_viewer_only_when_fully_interactive() {
+        let cli = Cli::try_parse_from(["mman", "ownership"]).expect("arguments should parse");
+
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: true,
+                    stdout: true,
+                }
+            ),
+            Ok(ExecutionMode::Viewer {
+                topic: String::from("ownership"),
+            })
+        );
+
+        for terminals in [
+            TerminalState {
+                stdin: false,
+                stdout: true,
+            },
+            TerminalState {
+                stdin: true,
+                stdout: false,
+            },
+        ] {
+            assert_eq!(
+                select_mode(&cli, terminals),
+                Ok(ExecutionMode::Raw {
+                    topic: String::from("ownership"),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_raw_overrides_interactive_terminal_state() {
+        let cli =
+            Cli::try_parse_from(["mman", "--raw", "ownership"]).expect("arguments should parse");
+
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: true,
+                    stdout: true,
+                }
+            ),
+            Ok(ExecutionMode::Raw {
+                topic: String::from("ownership"),
+            })
+        );
+    }
+
+    #[test]
+    fn where_mode_does_not_depend_on_terminal_state() {
+        let cli =
+            Cli::try_parse_from(["mman", "--where", "ownership"]).expect("arguments should parse");
+
+        assert_eq!(
+            select_mode(
+                &cli,
+                TerminalState {
+                    stdin: false,
+                    stdout: false,
+                }
+            ),
+            Ok(ExecutionMode::Where {
+                topic: String::from("ownership"),
+            })
+        );
     }
 }

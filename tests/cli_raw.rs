@@ -73,6 +73,18 @@ fn redirected_plain_topic_reports_missing_topic() {
 }
 
 #[test]
+fn noninteractive_invocation_without_topic_reports_usage_error() {
+    let output = mman_command().output().expect("mman should run");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert!(stderr.contains("topic is required in a non-interactive session"));
+    assert!(!stderr.contains("no documentation paths configured"));
+}
+
+#[test]
 fn raw_reports_missing_topic_on_stderr() {
     let root = tempdir().expect("temporary root should be created");
 

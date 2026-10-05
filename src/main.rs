@@ -23,6 +23,11 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    if !interactive && cli.topic.is_none() {
+        return Err("topic is required in a non-interactive session".into());
+    }
+
     let env_path = env::var_os("MMANPATH");
     let home = env::var_os("HOME").map(PathBuf::from);
 
@@ -35,15 +40,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
     let page_index = PageIndex::discover(&validated_paths.roots)?;
 
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-
     if cli.where_path || !interactive || cli.raw {
         let Some(topic) = cli.topic.as_deref() else {
-            if cli.where_path {
-                return Err("topic required for --where".into());
+            if !interactive {
+                return Err("topic is required in a non-interactive session".into());
             }
-            return Err("topic required for --raw".into());
+            return Err("topic required for --where".into());
         };
+
         let page = page_index.lookup(topic)?;
 
         if cli.where_path {
