@@ -36,6 +36,10 @@ not implemented yet.
 - Interactive Markdown viewer with Rosé Pine colors and keyboard scrolling.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
+- Flush-left headings with indented body content for stronger visual hierarchy.
+- Rosé Pine syntax highlighting for recognized fenced-code languages, with a
+  readable plain-code fallback for unknown languages.
+- Bordered code blocks that remain visually distinct from surrounding prose.
 - Selected source-path output with `--where`.
 - Hidden-file and hidden-directory exclusion.
 - Symlinked Markdown files, without traversing symlinked directories.

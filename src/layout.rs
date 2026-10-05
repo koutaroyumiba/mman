@@ -1,6 +1,9 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::document::{Block, Document, Link, Span, TextStyle};
+use crate::{
+    document::{Block, Document, Link, Span, TextStyle},
+    syntax::{SyntaxStyle, highlight_code},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Layout {
@@ -9,8 +12,16 @@ pub struct Layout {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Line {
-    pub spans: Vec<Span>,
+    pub spans: Vec<RenderedSpan>,
     pub kind: LineKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSpan {
+    pub text: String,
+    pub style: TextStyle,
+    pub link: Option<Link>,
+    pub syntax: Option<SyntaxStyle>,
 }
 
 impl Line {
@@ -24,6 +35,7 @@ pub enum LineKind {
     Prose,
     Heading(u8),
     Code,
+    CodeBorder,
     ThematicBreak,
 }
 
@@ -47,7 +59,12 @@ pub fn layout_document(document: &Document, width: usize) -> Layout {
         if index > 0 && !lines.is_empty() {
             lines.push(empty_line());
         }
-        layout_block(block, width, String::new(), String::new(), &mut lines);
+        let indent = if matches!(block, Block::Heading { .. }) {
+            String::new()
+        } else {
+            String::from("  ")
+        };
+        layout_block(block, width, indent.clone(), indent, &mut lines);
     }
 
     Layout { lines }
@@ -77,36 +94,15 @@ fn layout_block(
             &continuation_prefix,
             lines,
         ),
-        Block::CodeBlock { text, .. } => {
-            for (index, code_line) in text.split_terminator('\n').enumerate() {
-                let prefix = if index == 0 {
-                    &first_prefix
-                } else {
-                    &continuation_prefix
-                };
-                let mut line = Line {
-                    spans: Vec::new(),
-                    kind: LineKind::Code,
-                };
-                push_prefix(&mut line, prefix);
-                line.spans.push(Span {
-                    text: code_line.to_owned(),
-                    style: TextStyle {
-                        inline_code: true,
-                        ..TextStyle::default()
-                    },
-                    link: None,
-                });
-                lines.push(line);
-            }
-            if text.is_empty() {
-                let mut line = Line {
-                    spans: Vec::new(),
-                    kind: LineKind::Code,
-                };
-                push_prefix(&mut line, &first_prefix);
-                lines.push(line);
-            }
+        Block::CodeBlock { language, text } => {
+            layout_code_block(
+                text,
+                language.as_deref(),
+                width,
+                &first_prefix,
+                &continuation_prefix,
+                lines,
+            );
         }
         Block::BlockQuote { blocks } => {
             let quote_first = format!("{first_prefix}│ ");
@@ -156,13 +152,127 @@ fn layout_block(
                 kind: LineKind::ThematicBreak,
             };
             push_prefix(&mut line, &first_prefix);
-            line.spans.push(Span {
+            line.spans.push(RenderedSpan {
                 text: "─".repeat(available),
                 style: TextStyle::default(),
                 link: None,
+                syntax: None,
             });
             lines.push(line);
         }
+    }
+}
+
+fn layout_code_block(
+    text: &str,
+    language: Option<&str>,
+    width: usize,
+    first_prefix: &str,
+    continuation_prefix: &str,
+    lines: &mut Vec<Line>,
+) {
+    let available = available_width(width, continuation_prefix);
+    let content_width = available.saturating_sub(4).max(1);
+    push_code_border(lines, first_prefix, content_width, true);
+
+    if let Some(highlighted_lines) = highlight_code(text, language) {
+        if highlighted_lines.is_empty() {
+            push_code_line(lines, first_prefix, Vec::new(), content_width);
+        } else {
+            for (index, highlighted) in highlighted_lines.into_iter().enumerate() {
+                let spans = highlighted
+                    .into_iter()
+                    .map(|span| RenderedSpan {
+                        text: span.text,
+                        style: TextStyle {
+                            inline_code: true,
+                            ..TextStyle::default()
+                        },
+                        link: None,
+                        syntax: Some(span.style),
+                    })
+                    .collect();
+                push_code_line(
+                    lines,
+                    if index == 0 {
+                        first_prefix
+                    } else {
+                        continuation_prefix
+                    },
+                    spans,
+                    content_width,
+                );
+            }
+        }
+    } else {
+        let code_lines: Vec<&str> = if text.is_empty() {
+            vec![""]
+        } else {
+            text.split_terminator('\n').collect()
+        };
+
+        for (index, code_line) in code_lines.into_iter().enumerate() {
+            push_code_line(
+                lines,
+                if index == 0 {
+                    first_prefix
+                } else {
+                    continuation_prefix
+                },
+                vec![RenderedSpan {
+                    text: code_line.to_owned(),
+                    style: TextStyle {
+                        inline_code: true,
+                        ..TextStyle::default()
+                    },
+                    link: None,
+                    syntax: None,
+                }],
+                content_width,
+            );
+        }
+    }
+
+    push_code_border(lines, continuation_prefix, content_width, false);
+}
+
+fn push_code_line(
+    lines: &mut Vec<Line>,
+    prefix: &str,
+    mut spans: Vec<RenderedSpan>,
+    content_width: usize,
+) {
+    let text_width: usize = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.text.as_str()))
+        .sum();
+    let padding = content_width.saturating_sub(text_width);
+
+    spans.insert(0, plain_rendered_span(format!("{prefix}│ ")));
+    spans.push(plain_rendered_span(format!("{} │", " ".repeat(padding))));
+    lines.push(Line {
+        spans,
+        kind: LineKind::Code,
+    });
+}
+
+fn push_code_border(lines: &mut Vec<Line>, prefix: &str, content_width: usize, top: bool) {
+    let (left, right) = if top { ('╭', '╮') } else { ('╰', '╯') };
+    lines.push(Line {
+        spans: vec![plain_rendered_span(format!(
+            "{prefix}{left}{}{right}",
+            "─".repeat(content_width + 2)
+        ))],
+        kind: LineKind::CodeBorder,
+    });
+}
+
+fn plain_rendered_span(text: String) -> RenderedSpan {
+    RenderedSpan {
+        text,
+        style: TextStyle::default(),
+        link: None,
+        syntax: None,
     }
 }
 
@@ -321,19 +431,21 @@ fn flush_line(
     lines.push(Line { spans, kind });
 }
 
-fn append_character(spans: &mut Vec<Span>, character: StyledCharacter) {
+fn append_character(spans: &mut Vec<RenderedSpan>, character: StyledCharacter) {
     if let Some(previous) = spans.last_mut()
         && previous.style == character.style
         && previous.link == character.link
+        && previous.syntax.is_none()
     {
         previous.text.push(character.character);
         return;
     }
 
-    spans.push(Span {
+    spans.push(RenderedSpan {
         text: character.character.to_string(),
         style: character.style,
         link: character.link,
+        syntax: None,
     });
 }
 
@@ -344,10 +456,11 @@ fn push_prefix(line: &mut Line, prefix: &str) {
 
     line.spans.insert(
         0,
-        Span {
+        RenderedSpan {
             text: prefix.to_owned(),
             style: TextStyle::default(),
             link: None,
+            syntax: None,
         },
     );
 }

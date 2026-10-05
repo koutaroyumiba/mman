@@ -16,8 +16,7 @@ use ratatui::{
 };
 
 use crate::{
-    document::Span,
-    layout::{LineKind, layout_document},
+    layout::{LineKind, RenderedSpan, layout_document},
     markdown::parse_markdown,
 };
 
@@ -179,11 +178,12 @@ fn line_style(kind: LineKind) -> Style {
             .bg(BASE)
             .add_modifier(Modifier::BOLD),
         LineKind::Code => Style::default().fg(FOAM).bg(SURFACE),
+        LineKind::CodeBorder => Style::default().fg(MUTED).bg(SURFACE),
         LineKind::ThematicBreak => Style::default().fg(MUTED).bg(BASE),
     }
 }
 
-fn span_style(span: &Span, kind: LineKind) -> Style {
+fn span_style(span: &RenderedSpan, kind: LineKind) -> Style {
     let mut style = line_style(kind);
 
     if span.style.emphasis {
@@ -192,11 +192,24 @@ fn span_style(span: &Span, kind: LineKind) -> Style {
     if span.style.strong {
         style = style.fg(GOLD).add_modifier(Modifier::BOLD);
     }
-    if span.style.inline_code {
+    if span.style.inline_code && kind != LineKind::Code {
         style = style.fg(FOAM).bg(OVERLAY);
     }
     if span.link.is_some() {
         style = style.fg(PINE).add_modifier(Modifier::UNDERLINED);
+    }
+    if let Some(syntax) = span.syntax {
+        style = style.fg(Color::Rgb(
+            syntax.foreground.0,
+            syntax.foreground.1,
+            syntax.foreground.2,
+        ));
+        if syntax.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        if syntax.italic {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
     }
 
     style
