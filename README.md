@@ -37,7 +37,8 @@
   `-k` or `--search`.
 - Rendering for headings, paragraphs, emphasis, links, quotes, lists, code
   blocks, thematic breaks, and Unicode-aware wrapping.
-- Flush-left headings with indented body content for stronger visual hierarchy.
+- Man-page-style top headers with the page topic on both sides and an
+  `[mman manual]` label centered between them.
 - Rosé Pine syntax highlighting for recognized fenced-code languages, with a
   readable plain-code fallback for unknown languages.
 - Bordered code blocks that remain visually distinct from surrounding prose.

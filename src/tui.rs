@@ -461,7 +461,8 @@ fn render_viewer(
     let status = regions[1];
     let viewport_width = body.width.saturating_sub(2) as usize;
     let viewport_height = body.height.saturating_sub(2) as usize;
-    let layout = layout_document(document, viewport_width);
+    let mut layout = layout_document(document, viewport_width);
+    decorate_manual_header(&mut layout, viewport_width);
     let widest_line = layout
         .lines
         .iter()
@@ -690,6 +691,39 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn decorate_manual_header(layout: &mut crate::layout::Layout, width: usize) {
+    let Some(line) = layout
+        .lines
+        .iter_mut()
+        .find(|line| line.kind == LineKind::Heading(1))
+    else {
+        return;
+    };
+
+    let topic = line.plain_text();
+    let label = "[mman manual]";
+    let topic_width = UnicodeWidthStr::width(topic.as_str());
+    let label_width = UnicodeWidthStr::width(label);
+    let label_start = width.saturating_sub(label_width) / 2;
+
+    if label_start <= topic_width || width.saturating_sub(label_start + label_width) < topic_width {
+        return;
+    }
+
+    let left_padding = label_start - topic_width;
+    let right_padding = width - label_start - label_width - topic_width;
+    line.spans = vec![RenderedSpan {
+        text: format!(
+            "{topic}{}{label}{}{topic}",
+            " ".repeat(left_padding),
+            " ".repeat(right_padding)
+        ),
+        style: crate::document::TextStyle::default(),
+        link: None,
+        syntax: None,
+    }];
 }
 
 fn to_tui_line(
@@ -1061,6 +1095,14 @@ mod tests {
             .collect();
         assert!(contents.contains("mman · example"));
         assert!(contents.contains("body text"));
+
+        let heading_row: String = terminal.backend().buffer().content[60..120]
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(heading_row.contains("NAME"));
+        assert!(heading_row.contains("[mman manual]"));
+        assert_eq!(heading_row.matches("NAME").count(), 2);
     }
 
     #[test]
