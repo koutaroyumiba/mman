@@ -15,11 +15,8 @@ interactive topic picker, and an interactive Markdown viewer.
 ## Preview
 
 <p align="center">
-  <img src="assets/mman-demo.gif" alt="Concept preview of mman opening, navigating, and searching a Markdown manual page">
+  <img src="assets/mman-demo.gif" alt="mman topic picker, Markdown viewer, and in-page search">
 </p>
-
-> [!NOTE]
-> This is a concept preview. The final interface may change during implementation.
 
 ## Current features
 
