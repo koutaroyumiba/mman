@@ -8,8 +8,8 @@
 
 ## Status
 
-`mman` is under active development. The current version supports deterministic
-page discovery, exact topic lookup, raw Markdown output, source-path lookup, an
+`mman` is preparing its initial `0.1.0` release. It supports deterministic page
+discovery, exact topic lookup, raw Markdown output, source-path lookup, an
 interactive topic picker, and an interactive Markdown viewer.
 
 ## Preview
@@ -54,11 +54,11 @@ interactive topic picker, and an interactive Markdown viewer.
 
 ## Installation
 
-A packaged release is not available yet. To build the current development
-version from a local checkout:
+A packaged release is not available yet. Building from source requires Rust
+1.88 or newer:
 
 ```sh
-git clone <repository-url>
+git clone https://github.com/koutaroyumiba/mman.git
 cd mman
 cargo build --release
 ```
@@ -296,6 +296,10 @@ mode selection, path handling, topic validation, page discovery, precedence,
 duplicate retention, raw loading, typo suggestions, viewer state transitions,
 terminal-buffer rendering, and command-line output.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## License
 
 Licensed under the [MIT License](LICENSE).
@@ -305,4 +309,4 @@ Licensed under the [MIT License](LICENSE).
 The following documented goals are still planned:
 
 - Internal links and navigation history
-- Additional viewer controls such as search and link focus
+- Link focus and external URL actions
