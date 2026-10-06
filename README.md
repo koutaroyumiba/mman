@@ -4,13 +4,13 @@
 
 **Browse custom Markdown manual pages from the command line.**
 
+<a href="https://github.com/koutaroyumiba/mman/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/koutaroyumiba/mman?style=flat-square&color=ca9ee6" /></a>
+<a href="https://github.com/koutaroyumiba/mman/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/koutaroyumiba/mman/ci.yml?branch=main&style=flat-square&label=CI" /></a>
+<img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-8caaee?style=flat-square&logo=apple&logoColor=white" />
+<img alt="Minimum Rust version: 1.88" src="https://img.shields.io/badge/Rust-1.88%2B-ef9f76?style=flat-square&logo=rust&logoColor=white" />
+<a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-a6d189?style=flat-square" /></a>
+
 </div>
-
-## Status
-
-`mman` is preparing its initial `0.1.0` release. It supports deterministic page
-discovery, exact topic lookup, raw Markdown output, source-path lookup, an
-interactive topic picker, and an interactive Markdown viewer.
 
 ## Preview
 
